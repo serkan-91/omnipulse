@@ -1,0 +1,63 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Node / Frontend
+node_modules/
+.next/
+out/
+build/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+dist/
+
+# Logs and databases
+*.log
+*.sqlite
+*.db-journal
+*.db-shm
+*.db-wal
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# .NET / C#
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+*.userprefs
+TestResults/
+publish/
+
+# IDEs
+.idea/
+.vs/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln.docstates
+
+# Secrets / Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.workspace
+appsettings.local.json
+appsettings.*.local.json
+secrets.json
+appsettings.json
+appsettings.Development.json
+
+# Docker overrides
+docker-compose.override.yml

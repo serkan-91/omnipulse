@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Next.js: Client (Brave)",
+      "url": "https://localhost:3000",
+      "webRoot": "${workspaceFolder}",
+      "runtimeExecutable": "/var/lib/flatpak/exports/bin/com.brave.Browser"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Next.js: Server",
+      "program": "${workspaceFolder}/node_modules/.bin/next",
+      "args": ["dev"],
+      "runtimeArgs": ["--inspect"],
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Next.js: Full Stack (Brave)",
+      "configurations": [
+        "Next.js: Server",
+        "Next.js: Client (Brave)"
+      ]
+    }
+  ]
+}

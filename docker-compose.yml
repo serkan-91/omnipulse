@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  omnipulse-db:
+    image: postgres:16-alpine
+    container_name: omnipulse-postgres
+    environment:
+      POSTGRES_USER: omnipulse_admin
+      POSTGRES_PASSWORD: StrongPassword123! # Gerçek hayatta bunu .env ile sakla şefim!
+      POSTGRES_DB: omnipulse_shared
+      # IoT veritabanını da başlatırken oluşturuyoruz!
+      POSTGRES_MULTIPLE_DATABASES: omnipulse_shared,OmniPulse_IoT
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Eğer veritabanlarını otomatik yaratmasını istersen buraya bir init scripti bağlayabiliriz
+    networks:
+      - omnipulse-network
+    restart: always
+
+volumes:
+  postgres_data:
+
+networks:
+  omnipulse-network:
+    driver: bridge
