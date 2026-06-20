@@ -43,6 +43,8 @@ builder.Services.AddAuthorization();
 // Aktif Kullanıcı ve Kiracı Bağlamını (Context) sağlayan servisimiz
 builder.Services.AddScoped<IUserTenantContext, UserTenantContext>();
 builder.Services.AddScoped<ITokenService, TokenService>();
+builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
+builder.Services.AddSignalR();
 
 // Log kirliliğini engellemek için filtre
 builder.Logging.AddFilter("LuckyPennySoftware.MediatR", LogLevel.Error);
@@ -73,5 +75,8 @@ app.UseAuthorization();
 // 3. Endpointleri map'le
 app.MapTenantEndpoints();
 app.MapIoTEndpoints();
+
+// 4. SignalR Hub'larını map'le 🚨
+app.MapHub<OmniPulse.Modules.IoTModule.Hubs.AlarmHub>("/hubs/alarms");
 
 app.Run();

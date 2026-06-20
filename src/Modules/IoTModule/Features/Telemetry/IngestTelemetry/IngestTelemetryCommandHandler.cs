@@ -12,7 +12,7 @@ namespace OmniPulse.Modules.IoTModule.Features.Telemetry.IngestTelemetry;
 /// IoT cihazlarından gelen telemetri verisini işleyen ve veri tabanına mühürleyen komut işleyicisi! 🌡️📡
 /// Seri numarası üzerinden cihazı bulur, aktiflik durumunu denetler ve kiracı izolasyonuna uygun kaydeder.
 /// </summary>
-public class IngestTelemetryCommandHandler(IoTDbContext dbContext) 
+public class IngestTelemetryCommandHandler(IoTDbContext dbContext, MediatR.IMediator mediator) 
     : IRequestHandler<IngestTelemetryCommand, IngestTelemetryResponse>
 {
     public async Task<IngestTelemetryResponse> Handle(IngestTelemetryCommand request, CancellationToken cancellationToken)
@@ -53,6 +53,16 @@ public class IngestTelemetryCommandHandler(IoTDbContext dbContext)
 
         dbContext.Telemetries.Add(telemetry);
         await dbContext.SaveChangesAsync(cancellationToken);
+
+        // 3. Alarmların tetiklenmesi için olayı (event) yayınla 🔔
+        await mediator.Publish(new TelemetryIngestedEvent(
+            device.TenantId,
+            device.Id,
+            device.Name,
+            request.Temperature,
+            request.Pressure,
+            request.Timestamp
+        ), cancellationToken);
 
         return new IngestTelemetryResponse(
             Message: $"Telemetri başarıyla alındı: [{device.Name}] -> Sıcaklık: {request.Temperature}°C, Basınç: {request.Pressure} hPa. ⚡",
