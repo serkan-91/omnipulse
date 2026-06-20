@@ -21,6 +21,14 @@ public static class DependencyInjection
         // MediatR artık tam çalışacak!
         services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly()));
 
+        // Kuyruk ve Arka Plan Alarm İşleme Servisleri 🚨🔋
+        services.AddSingleton<Features.Telemetry.IngestTelemetry.TelemetryQueue>();
+        services.AddScoped<Features.Alarms.IAlarmService, Features.Alarms.AlarmService>();
+        services.AddHostedService<Features.Alarms.TelemetryAlarmBackgroundProcessor>();
+
+        // MediatR IPipelineBehavior Önbellekleme Kaydı 🌳⚡
+        services.AddTransient(typeof(MediatR.IPipelineBehavior<,>), typeof(Features.DeviceCategories.DeviceCategoryCacheBehavior<,>));
+
         return services;
     }
 }

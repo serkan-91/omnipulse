@@ -7,6 +7,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using OmniPulse.BuildingBlocks.Interfaces;
 using OmniPulse.Modules.IoTModule.Infrastructure.Persistence;
+using OmniPulse.Modules.IoTModule.Features.Telemetry;
 
 namespace OmniPulse.Modules.IoTModule.Features.Telemetry.GetTelemetry;
 
@@ -20,25 +21,8 @@ public class GetTelemetryQueryHandler(
         var query = dbContext.Telemetries
             .Include(t => t.Device)
             .ThenInclude(d => d.Vehicle)
-            .AsNoTracking();
-
-        // 1. Sürücü/Driver Satır Bazlı Filtreleme (ABAC) 🚛
-        var isDriver = userTenantContext.Roles.Contains("Driver", StringComparer.OrdinalIgnoreCase) || 
-                       userTenantContext.Roles.Contains("Sürücü", StringComparer.OrdinalIgnoreCase);
-
-        if (isDriver)
-        {
-            if (Guid.TryParse(userTenantContext.UserId, out var driverUserId))
-            {
-                // Sürücü yalnızca kendisine zimmetli araca takılı cihazların telemetrilerini görebilir!
-                query = query.Where(t => t.Device.Vehicle != null && t.Device.Vehicle.DriverUserId == driverUserId);
-            }
-            else
-            {
-                // Kullanıcı kimliği doğrulanamadıysa, güvenlik gereği veri döndürmüyoruz
-                return new PagedResult<TelemetryDto>(new List<TelemetryDto>(), 0, request.Page, request.PageSize);
-            }
-        }
+            .AsNoTracking()
+            .ApplyDriverFilter(userTenantContext);
 
         // 2. Diğer isteğe bağlı filtreleri uygula
         if (request.DeviceId.HasValue)

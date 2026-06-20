@@ -15,6 +15,7 @@ builder.Services.AddOpenApi(); // .NET 10 yerleşik OpenAPI
 builder.Services.AddTenantModule(builder.Configuration);
 builder.Services.AddIoTModule(builder.Configuration); 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
 
 // JWT kimlik doğrulama ayarları (Amazon/Microsoft standartlarında, Token bazlı tünel!) 🔐
 builder.Services.AddAuthentication(options =>
