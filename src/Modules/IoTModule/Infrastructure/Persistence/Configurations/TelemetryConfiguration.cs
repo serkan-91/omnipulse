@@ -12,9 +12,17 @@ public class TelemetryConfiguration : IEntityTypeConfiguration<Telemetry>
 
         builder.HasKey(t => t.Id);
 
+        builder.Property(t => t.TenantId)
+            .IsRequired();
+
         builder.Property(t => t.DeviceId)
-            .IsRequired()
-            .HasMaxLength(100);
+            .IsRequired();
+
+        // Bir cihazın birden fazla telemetri kaydı olur 📈
+        builder.HasOne(t => t.Device)
+            .WithMany(d => d.Telemetries)
+            .HasForeignKey(t => t.DeviceId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         builder.Property(t => t.Temperature)
             .IsRequired();
@@ -25,7 +33,18 @@ public class TelemetryConfiguration : IEntityTypeConfiguration<Telemetry>
         builder.Property(t => t.Timestamp)
             .IsRequired();
 
-        builder.Property(t => t.CreatedAt)
+        builder.Property(t => t.CreatedAtUtc)
             .IsRequired();
+
+        builder.Property(t => t.CreatedBy)
+            .HasMaxLength(100)
+            .IsRequired(false);
+
+        builder.Property(t => t.LastModifiedAtUtc)
+            .IsRequired(false);
+
+        builder.Property(t => t.LastModifiedBy)
+            .HasMaxLength(100)
+            .IsRequired(false);
     }
 }

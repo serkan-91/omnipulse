@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/OmniPulse.Identity.API/OmniPulse.Identity.API.csproj" />
+    <Project Path="src/BuildingBlocks/OmniPulse.BuildingBlocks.csproj" />
   </Folder>
   <Folder Name="/src/Modules/IoTModule/">
     <Project Path="src/Modules/IoTModule/IoTModule.csproj" />

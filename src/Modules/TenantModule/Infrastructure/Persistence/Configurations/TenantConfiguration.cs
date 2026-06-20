@@ -35,5 +35,32 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
 
         builder.Property(t => t.IsActive)
             .HasDefaultValue(true);
+
+        // Denetim (Auditing) Alanları
+        builder.Property(t => t.CreatedAtUtc)
+            .IsRequired();
+
+        builder.Property(t => t.CreatedBy)
+            .HasMaxLength(100)
+            .IsRequired(false);
+
+        builder.Property(t => t.LastModifiedAtUtc)
+            .IsRequired(false);
+
+        builder.Property(t => t.LastModifiedBy)
+            .HasMaxLength(100)
+            .IsRequired(false);
+
+        // Soft Delete Alanları
+        builder.Property(t => t.IsDeleted)
+            .HasDefaultValue(false)
+            .IsRequired();
+
+        builder.Property(t => t.DeletedAtUtc)
+            .IsRequired(false);
+
+        builder.Property(t => t.DeletedBy)
+            .HasMaxLength(100)
+            .IsRequired(false);
     }
 }

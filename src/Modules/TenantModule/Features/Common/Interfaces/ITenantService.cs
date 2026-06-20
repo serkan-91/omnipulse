@@ -12,4 +12,7 @@ public interface ITenantService
 
     // Şu anki kiracının tüm domain bilgilerini nesne olarak döner
     Tenant? GetCurrentTenant();
+
+    // Kiracı bağlamını el ile doldurmak (hydrate etmek) için kullanılan korumalı metod 🛡️
+    void SetTenant(Tenant tenant);
 }

@@ -27,4 +27,8 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\BuildingBlocks\OmniPulse.BuildingBlocks.csproj" />
+  </ItemGroup>
+
 </Project>

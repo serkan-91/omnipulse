@@ -21,6 +21,8 @@ public class TenantService : ITenantService
 
     public Tenant? GetCurrentTenant() => _currentTenant;
 
+    public void SetTenant(Tenant tenant) => _currentTenant = tenant;
+
     private void DetermineCurrentTenant()
     {
         var httpContext = _httpContextAccessor.HttpContext;
