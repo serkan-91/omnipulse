@@ -97,6 +97,26 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                 await Task.Delay(500, cancellationToken);
                 retries++;
             }
+
+            // TTL'i 'ExpireTime' kolonu için aktif et 🗑️
+            try
+            {
+                var ttlRequest = new UpdateTimeToLiveRequest
+                {
+                    TableName = TableName,
+                    TimeToLiveSpecification = new TimeToLiveSpecification
+                    {
+                        AttributeName = "ExpireTime",
+                        Enabled = true
+                    }
+                };
+                await _dynamoDb.UpdateTimeToLiveAsync(ttlRequest, cancellationToken);
+                _logger.LogInformation("✅ '{TableName}' tablosunda 'ExpireTime' kolonu için TTL aktif edildi!", TableName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "⚠️ '{TableName}' tablosunda TTL aktif edilemedi. AWS ortamına bağlı olarak bu normal olabilir.", TableName);
+            }
         }
     }
 
@@ -117,7 +137,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "⚠️ AWS DynamoDB tablosu doğrulanamadı veya oluşturulamadı. Bellek moduna (Fallback) geçiliyor.");
+                _logger.LogWarning(ex, "⚠️ '{TableName}' tablosu doğrulanamadı veya oluşturulamadı. Bellek moduna (Fallback) geçiliyor.", TableName);
                 lock (Lock)
                 {
                     _useFallback = true;
@@ -151,6 +171,11 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                 { "Version", new AttributeValue { N = (task.Version + 1).ToString() } }
             }
         };
+
+        if (task.ExpireTime.HasValue)
+        {
+            request.Item.Add("ExpireTime", new AttributeValue { N = task.ExpireTime.Value.ToString() });
+        }
 
         if (task.AssignedUserId.HasValue)
         {
@@ -227,6 +252,14 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
     public async Task SaveTaskAsync(WorkflowTask task, CancellationToken cancellationToken = default)
     {
         task.UpdatedAtUtc = DateTime.UtcNow;
+        if (task.Status is "Completed" or "Cancelled")
+        {
+            task.ExpireTime = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds();
+        }
+        else
+        {
+            task.ExpireTime = null;
+        }
 
         await EnsureInitializedAsync(cancellationToken);
 
@@ -506,6 +539,14 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         var oldStatus = task.Status;
         task.Status = newStatus;
         task.UpdatedAtUtc = DateTime.UtcNow;
+        if (newStatus is "Completed" or "Cancelled")
+        {
+            task.ExpireTime = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds();
+        }
+        else
+        {
+            task.ExpireTime = null;
+        }
 
         await EnsureInitializedAsync(cancellationToken);
 
@@ -513,6 +554,22 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         {
             try
             {
+                var updateExpression = "SET #s = :newStatus, GSI1_SK = :gsi1Sk, UpdatedAtUtc = :updatedAt, Version = :newVersion";
+                var expressionAttributeValues = new Dictionary<string, AttributeValue>
+                {
+                    { ":newStatus",       new AttributeValue { S = newStatus } },
+                    { ":gsi1Sk",          new AttributeValue { S = $"{newStatus}#WorkflowTask" } },
+                    { ":updatedAt",       new AttributeValue { S = task.UpdatedAtUtc.ToString("o") } },
+                    { ":newVersion",      new AttributeValue { N = (task.Version + 1).ToString() } },
+                    { ":expectedVersion", new AttributeValue { N = task.Version.ToString() } }
+                };
+
+                if (task.ExpireTime.HasValue)
+                {
+                    updateExpression += ", ExpireTime = :expireTime";
+                    expressionAttributeValues.Add(":expireTime", new AttributeValue { N = task.ExpireTime.Value.ToString() });
+                }
+
                 var updateRequest = new UpdateItemRequest
                 {
                     TableName = TableName,
@@ -521,17 +578,10 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                         { "PK", new AttributeValue { S = task.PK } },
                         { "SK", new AttributeValue { S = task.SK } }
                     },
-                    UpdateExpression = "SET #s = :newStatus, GSI1_SK = :gsi1Sk, UpdatedAtUtc = :updatedAt, Version = :newVersion",
+                    UpdateExpression = updateExpression,
                     ConditionExpression = "Version = :expectedVersion",
                     ExpressionAttributeNames = new Dictionary<string, string> { { "#s", "Status" } },
-                    ExpressionAttributeValues = new Dictionary<string, AttributeValue>
-                    {
-                        { ":newStatus",       new AttributeValue { S = newStatus } },
-                        { ":gsi1Sk",          new AttributeValue { S = $"{newStatus}#WorkflowTask" } },
-                        { ":updatedAt",       new AttributeValue { S = task.UpdatedAtUtc.ToString("o") } },
-                        { ":newVersion",      new AttributeValue { N = (task.Version + 1).ToString() } },
-                        { ":expectedVersion", new AttributeValue { N = task.Version.ToString() } }
-                    }
+                    ExpressionAttributeValues = expressionAttributeValues
                 };
 
                 await _dynamoDb.UpdateItemAsync(updateRequest, cancellationToken);
@@ -598,6 +648,11 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         if (attributes.TryGetValue("ExecutionContextJson", out var execCtxAttr))
         {
             task.ExecutionContextJson = execCtxAttr.S;
+        }
+
+        if (attributes.TryGetValue("ExpireTime", out var expireTimeAttr))
+        {
+            task.ExpireTime = long.Parse(expireTimeAttr.N);
         }
 
         return task;

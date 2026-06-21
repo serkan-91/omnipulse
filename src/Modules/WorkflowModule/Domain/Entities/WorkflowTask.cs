@@ -40,4 +40,7 @@ public class WorkflowTask
 
     // Çalışma anı telemetrisi ve meta verileri
     public string? ExecutionContextJson { get; set; }
+
+    // Tamamlanmış/İptal edilmiş görevlerin otomatik silinmesi için TTL zaman damgası (Unix Timestamp) 🗑️
+    public long? ExpireTime { get; set; }
 }
