@@ -22,6 +22,7 @@ public class TelemetryEventPayload
     public string? TelemetryKey { get; init; }
     public double? TelemetryValue { get; init; }
     public string? EventId { get; init; }
+    public DateTime? Timestamp { get; init; }
 
     // IoT Module specific properties
     public Guid? TelemetryId { get; init; }
@@ -278,18 +279,31 @@ public partial class KinesisTelemetryConsumer : BackgroundService
             if (!string.IsNullOrEmpty(payload.TelemetryKey))
             {
                 // Standart/Jenerik Telemetri formatı
+                // CihazID ve Zaman damgasından üretilen deterministik EventId sayesinde mükerrer telemetriler yakalanır! 🛡️
+                var eventId = payload.EventId;
+                if (string.IsNullOrEmpty(eventId))
+                {
+                    var ts = payload.Timestamp ?? DateTime.UtcNow;
+                    eventId = $"GEN-{payload.DeviceId}-{ts:yyyyMMddHHmmss}";
+                }
+
                 eventsToProcess.Add(new ProcessTelemetryEventCommand(
                     TenantId: payload.TenantId,
                     DeviceId: payload.DeviceId,
                     TelemetryKey: payload.TelemetryKey,
                     TelemetryValue: payload.TelemetryValue ?? 0.0,
-                    SourceEventId: payload.EventId ?? $"EVT-{Guid.NewGuid()}"
+                    SourceEventId: eventId
                 ));
             }
             else if (payload.Temperature.HasValue || payload.Pressure.HasValue)
             {
                 // IoT Modülü spesifik formatı (Sıcaklık ve Basınç alanları içeren paket)
-                var eventIdBase = payload.TelemetryId?.ToString() ?? Guid.NewGuid().ToString();
+                var eventIdBase = payload.TelemetryId?.ToString();
+                if (string.IsNullOrEmpty(eventIdBase))
+                {
+                    var ts = payload.Timestamp ?? DateTime.UtcNow;
+                    eventIdBase = $"{payload.DeviceId}-{ts:yyyyMMddHHmmss}";
+                }
 
                 if (payload.Temperature.HasValue)
                 {
@@ -316,6 +330,18 @@ public partial class KinesisTelemetryConsumer : BackgroundService
 
             foreach (var command in eventsToProcess)
             {
+                // ─── Tüketici (Consumer) Seviyesinde Mükerrer Kayıt Filtreleme (Idempotency Layer) 🛡️ ───
+                using var scope = _serviceProvider.CreateScope();
+                var taskStore = scope.ServiceProvider.GetRequiredService<IWorkflowTaskStore>();
+
+                var isDuplicate = await taskStore.HasEventBeenProcessedAsync(command.TenantId, command.SourceEventId, cancellationToken);
+                if (isDuplicate)
+                {
+                    _logger.LogInformation("⏭️ [KinesisConsumer] Mükerrer telemetri paketi elendi. Cihaz: {DeviceId}, Olay: {EventId}",
+                        command.DeviceId, command.SourceEventId);
+                    continue; // İşleme girmeden (SignalR ve MediatR tetiklemeden) atla!
+                }
+
                 // Canlı izleme paneli için telemetriyi SignalR üzerinden yayınla 📊⚡
                 if (_hubContext != null)
                 {
@@ -341,7 +367,6 @@ public partial class KinesisTelemetryConsumer : BackgroundService
                     try
                     {
                         attempt++;
-                        using var scope = _serviceProvider.CreateScope();
                         var mediator = scope.ServiceProvider.GetRequiredService<ISender>();
 
                         await mediator.Send(command, cancellationToken);
