@@ -22,6 +22,6 @@ public class GetTasksQueryHandler(
         }
 
         var tenantId = userTenantContext.TenantId.Value;
-        return await taskStore.GetTasksByTenantAsync(tenantId, cancellationToken);
+        return await taskStore.GetTasksByTenantAsync(tenantId, request.Status, cancellationToken);
     }
 }

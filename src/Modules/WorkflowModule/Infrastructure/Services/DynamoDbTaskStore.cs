@@ -15,6 +15,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
     private static readonly Dictionary<string, (WorkflowTask Task, int Version)> İnMemoryFallback = new();
     private static readonly Lock Lock = new();
     private bool _useFallback;
+    private bool _tableVerified;
     private DateTime _lastCheckTimeUtc = DateTime.MinValue;
     private readonly TimeSpan _checkCooldown = TimeSpan.FromSeconds(30);
 
@@ -37,6 +38,91 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         if (_useFallback)
         {
             _logger.LogWarning("⚠️ AWS DynamoDB bağlantısı kurulamadı. Geliştirici modu için yerel bellek (In-Memory) task deposu aktif edildi!");
+        }
+    }
+
+    private async Task EnsureTableExistsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _dynamoDb.DescribeTableAsync(TableName, cancellationToken);
+            if (response.Table != null)
+            {
+                return;
+            }
+        }
+        catch (ResourceNotFoundException)
+        {
+            _logger.LogInformation("⚠️ '{TableName}' tablosu bulunamadı. GSI (TenantStatusIndex) ile yeni tablo oluşturuluyor...", TableName);
+            var createRequest = new CreateTableRequest
+            {
+                TableName = TableName,
+                AttributeDefinitions = new List<AttributeDefinition>
+                {
+                    new AttributeDefinition("PK", ScalarAttributeType.S),
+                    new AttributeDefinition("SK", ScalarAttributeType.S),
+                    new AttributeDefinition("TenantId", ScalarAttributeType.S),
+                    new AttributeDefinition("Status", ScalarAttributeType.S)
+                },
+                KeySchema = new List<KeySchemaElement>
+                {
+                    new KeySchemaElement("PK", KeyType.HASH),
+                    new KeySchemaElement("SK", KeyType.RANGE)
+                },
+                BillingMode = BillingMode.PAY_PER_REQUEST,
+                GlobalSecondaryIndexes = new List<GlobalSecondaryIndex>
+                {
+                    new GlobalSecondaryIndex
+                    {
+                        IndexName = "TenantStatusIndex",
+                        KeySchema = new List<KeySchemaElement>
+                        {
+                            new KeySchemaElement("TenantId", KeyType.HASH),
+                            new KeySchemaElement("Status", KeyType.RANGE)
+                        },
+                        Projection = new Projection { ProjectionType = ProjectionType.ALL }
+                    }
+                }
+            };
+            await _dynamoDb.CreateTableAsync(createRequest, cancellationToken);
+            _logger.LogInformation("✅ '{TableName}' tablosu ve 'TenantStatusIndex' GSI başarıyla oluşturuldu!", TableName);
+            
+            // Tablo ACTIVE olana kadar kısa bir süre bekle (özellikle LocalStack için)
+            int retries = 0;
+            while (retries < 10)
+            {
+                var desc = await _dynamoDb.DescribeTableAsync(TableName, cancellationToken);
+                if (desc.Table.TableStatus == TableStatus.ACTIVE)
+                    break;
+                await Task.Delay(500, cancellationToken);
+                retries++;
+            }
+        }
+    }
+
+    private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
+    {
+        if (_useFallback)
+        {
+            await TryRecoverAwsConnectionAsync(cancellationToken);
+            return;
+        }
+
+        if (!_tableVerified)
+        {
+            try
+            {
+                await EnsureTableExistsAsync(cancellationToken);
+                _tableVerified = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "⚠️ AWS DynamoDB tablosu doğrulanamadı veya oluşturulamadı. Bellek moduna (Fallback) geçiliyor.");
+                lock (Lock)
+                {
+                    _useFallback = true;
+                }
+            }
         }
     }
 
@@ -104,36 +190,36 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(3));
-            var response = await _dynamoDb.DescribeTableAsync(TableName, cts.Token);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
             
-            if (response.Table != null && response.Table.TableStatus == TableStatus.ACTIVE)
+            // Tablo yoksa oluştur, varsa geç
+            await EnsureTableExistsAsync(cts.Token);
+            
+            _logger.LogInformation("🔄 AWS bağlantısı geri geldi! Bellekteki veriler DynamoDB'ye aktarılıyor...");
+
+            List<WorkflowTask> tasksToSync;
+            lock (Lock)
             {
-                _logger.LogInformation("🔄 AWS bağlantısı geri geldi! Bellekteki veriler DynamoDB'ye aktarılıyor...");
-
-                List<WorkflowTask> tasksToSync;
-                lock (Lock)
-                {
-                    tasksToSync = İnMemoryFallback.Values.Select(v => v.Task).ToList();
-                }
-
-                foreach (var task in tasksToSync)
-                {
-                    await PutTaskToDynamoDbAsync(task, cancellationToken);
-                }
-
-                lock (Lock)
-                {
-                    İnMemoryFallback.Clear();
-                    _useFallback = false;
-                }
-
-                _logger.LogInformation("✅ Bellek tamamen eritildi ve AWS'ye aktarıldı. Sistem normal moda döndü!");
+                tasksToSync = İnMemoryFallback.Values.Select(v => v.Task).ToList();
             }
+
+            foreach (var task in tasksToSync)
+            {
+                await PutTaskToDynamoDbAsync(task, cancellationToken);
+            }
+
+            lock (Lock)
+            {
+                İnMemoryFallback.Clear();
+                _useFallback = false;
+                _tableVerified = true;
+            }
+
+            _logger.LogInformation("✅ Bellek tamamen eritildi ve AWS'ye aktarıldı. Sistem normal moda döndü!");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "❌ AWS bağlantı kontrolü başarısız. Fallback moduna devam ediliyor.");
+            _logger.LogWarning(ex, "❌ AWS bağlantı kontrolü veya tablo oluşturma başarısız. Fallback moduna devam ediliyor.");
         }
     }
 
@@ -141,10 +227,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
     {
         task.UpdatedAtUtc = DateTime.UtcNow;
 
-        if (_useFallback)
-        {
-            await TryRecoverAwsConnectionAsync(cancellationToken);
-        }
+        await EnsureInitializedAsync(cancellationToken);
 
         if (!_useFallback)
         {
@@ -195,10 +278,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         var pk = $"TENANT#{tenantId}";
         var sk = $"TASK#{taskId}";
 
-        if (_useFallback)
-        {
-            await TryRecoverAwsConnectionAsync(cancellationToken);
-        }
+        await EnsureInitializedAsync(cancellationToken);
 
         if (!_useFallback)
         {
@@ -241,10 +321,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
 
     public async Task<bool> HasEventBeenProcessedAsync(Guid tenantId, string sourceEventId, CancellationToken cancellationToken = default)
     {
-        if (_useFallback)
-        {
-            await TryRecoverAwsConnectionAsync(cancellationToken);
-        }
+        await EnsureInitializedAsync(cancellationToken);
 
         if (!_useFallback)
         {
@@ -283,28 +360,45 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         }
     }
 
-    public async Task<IEnumerable<WorkflowTask>> GetTasksByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    public async Task<IEnumerable<WorkflowTask>> GetTasksByTenantAsync(Guid tenantId, string? status = null, CancellationToken cancellationToken = default)
     {
         var pk = $"TENANT#{tenantId}";
 
-        if (_useFallback)
-        {
-            await TryRecoverAwsConnectionAsync(cancellationToken);
-        }
+        await EnsureInitializedAsync(cancellationToken);
 
         if (!_useFallback)
         {
             try
             {
-                var request = new QueryRequest
+                QueryRequest request;
+                if (!string.IsNullOrEmpty(status))
                 {
-                    TableName = TableName,
-                    KeyConditionExpression = "PK = :pk",
-                    ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                    // TenantStatusIndex GSI kullanımı - RCU ve WCU maliyetlerini minimize eder! 🚀
+                    request = new QueryRequest
                     {
-                        { ":pk", new AttributeValue { S = pk } }
-                    }
-                };
+                        TableName = TableName,
+                        IndexName = "TenantStatusIndex",
+                        KeyConditionExpression = "TenantId = :tenantId AND #s = :status",
+                        ExpressionAttributeNames = new Dictionary<string, string> { { "#s", "Status" } },
+                        ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                        {
+                            { ":tenantId", new AttributeValue { S = tenantId.ToString() } },
+                            { ":status", new AttributeValue { S = status } }
+                        }
+                    };
+                }
+                else
+                {
+                    request = new QueryRequest
+                    {
+                        TableName = TableName,
+                        KeyConditionExpression = "PK = :pk",
+                        ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                        {
+                            { ":pk", new AttributeValue { S = pk } }
+                        }
+                    };
+                }
 
                 var response = await _dynamoDb.QueryAsync(request, cancellationToken);
                 return response.Items.Select(MapFromAttributes).ToList();
@@ -321,10 +415,15 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
 
         lock (Lock)
         {
-            return İnMemoryFallback.Values
-                .Where(v => v.Task.PK == pk)
-                .Select(v => v.Task)
-                .ToList();
+            var query = İnMemoryFallback.Values
+                .Where(v => v.Task.PK == pk);
+
+            if (!string.IsNullOrEmpty(status))
+            {
+                query = query.Where(v => v.Task.Status == status);
+            }
+
+            return query.Select(v => v.Task).ToList();
         }
     }
 
@@ -333,10 +432,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
     {
         var pk = $"TENANT#{tenantId}";
 
-        if (_useFallback)
-        {
-            await TryRecoverAwsConnectionAsync(cancellationToken);
-        }
+        await EnsureInitializedAsync(cancellationToken);
 
         if (!_useFallback)
         {
@@ -387,10 +483,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
         task.Status = newStatus;
         task.UpdatedAtUtc = DateTime.UtcNow;
 
-        if (_useFallback)
-        {
-            await TryRecoverAwsConnectionAsync(cancellationToken);
-        }
+        await EnsureInitializedAsync(cancellationToken);
 
         if (!_useFallback)
         {

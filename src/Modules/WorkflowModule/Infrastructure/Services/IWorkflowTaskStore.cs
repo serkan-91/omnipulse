@@ -21,9 +21,10 @@ public interface IWorkflowTaskStore
     Task<bool> HasEventBeenProcessedAsync(Guid tenantId, string sourceEventId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Bir kiracıya ait tüm görevleri listeler.
+    /// Bir kiracıya ait görevleri listeler. Opsiyonel olarak durum (status) filtresi verilebilir.
+    /// Durum filtresi verildiğinde DynamoDB TenantStatusIndex GSI'ı tetiklenir ve maliyet minimize edilir.
     /// </summary>
-    Task<IEnumerable<WorkflowTask>> GetTasksByTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<IEnumerable<WorkflowTask>> GetTasksByTenantAsync(Guid tenantId, string? status = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Aynı varlık ve workflow için zaten aktif (Pending veya InProgress) bir görev var mı?

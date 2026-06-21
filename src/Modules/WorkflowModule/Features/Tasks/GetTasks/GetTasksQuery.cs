@@ -5,4 +5,4 @@ using OmniPulse.Modules.WorkflowModule.Domain.Entities;
 
 namespace OmniPulse.Modules.WorkflowModule.Features.Tasks.GetTasks;
 
-public record GetTasksQuery : IRequest<IEnumerable<WorkflowTask>>;
+public record GetTasksQuery(string? Status = null) : IRequest<IEnumerable<WorkflowTask>>;
