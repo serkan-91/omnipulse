@@ -324,26 +324,40 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
     {
         await EnsureInitializedAsync(cancellationToken);
 
+        var pk = $"TENANT#{tenantId}";
+        var sk = $"EVENT#{sourceEventId}";
+
         if (!_useFallback)
         {
             try
             {
-                // Idempotency: Kaynak olayın bu tenant için daha önce işlenip işlenmediğini sorguluyoruz.
-                // Query kullanarak PK bazlı filtre uygulayabiliriz (yüksek performans için).
-                var request = new QueryRequest
+                // Atomik kayıt eklemeyi deniyoruz. attribute_not_exists ile mükerrer istekleri engelleriz.
+                var ttl = DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeSeconds(); // 7 günlük saklama süresi (DynamoDB TTL özelliği otomatik temizler)
+                
+                var request = new PutItemRequest
                 {
                     TableName = TableName,
-                    KeyConditionExpression = "PK = :pk",
-                    FilterExpression = "SourceEventId = :eventId",
-                    ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                    Item = new Dictionary<string, AttributeValue>
                     {
-                        { ":pk", new AttributeValue { S = $"TENANT#{tenantId}" } },
-                        { ":eventId", new AttributeValue { S = sourceEventId } }
-                    }
+                        { "PK", new AttributeValue { S = pk } },
+                        { "SK", new AttributeValue { S = sk } },
+                        { "TenantId", new AttributeValue { S = tenantId.ToString() } },
+                        { "SourceEventId", new AttributeValue { S = sourceEventId } },
+                        { "TTL", new AttributeValue { N = ttl.ToString() } },
+                        { "ProcessedAtUtc", new AttributeValue { S = DateTime.UtcNow.ToString("o") } }
+                    },
+                    ConditionExpression = "attribute_not_exists(PK) AND attribute_not_exists(SK)"
                 };
 
-                var response = await _dynamoDb.QueryAsync(request, cancellationToken);
-                return response.Count > 0;
+                await _dynamoDb.PutItemAsync(request, cancellationToken);
+                
+                // Başarıyla eklendiğine göre daha önce işlenmemişti! false dönüyoruz.
+                return false;
+            }
+            catch (ConditionalCheckFailedException)
+            {
+                // Zaten kayıtlı! Mükerrer olduğu için true dönüyoruz.
+                return true;
             }
             catch (Exception ex)
             {
@@ -355,9 +369,19 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
             }
         }
 
+        // In-Memory Fallback
         lock (Lock)
         {
-            return İnMemoryFallback.Values.Any(v => v.Task.TenantId == tenantId && v.Task.SourceEventId == sourceEventId);
+            var key = $"{pk}#{sk}";
+            if (İnMemoryFallback.ContainsKey(key))
+            {
+                return true; // Zaten işlenmiş
+            }
+            
+            // Yeni olay kaydı (bellekte tut)
+            var mockTask = new WorkflowTask { PK = pk, SK = sk, TenantId = tenantId, SourceEventId = sourceEventId };
+            İnMemoryFallback[key] = (mockTask, 1);
+            return false;
         }
     }
 
