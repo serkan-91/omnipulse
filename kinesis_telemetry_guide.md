@@ -135,3 +135,31 @@ AWS Kinesis'in yüksek throughput ve sıralı veri akışı avantajını kullana
 ### 4. Audit Log ve Cihaz Güvenliği Takibi
 * **Senaryo**: Cihazların bağlantı sıklıkları, geçersiz veri gönderme sıklıkları ve yetkisiz erişim denemelerinin güvenlik analizi.
 * **Nasıl Uygulanır**: Cihazların bağlantı/bağlantı kesme durumları da Kinesis'e bir event olarak basılır. Güvenlik analizörü (SIEM) bu akışı dinleyerek anormal cihaz hareketlerinde güvenlik alarmları tetikler.
+
+---
+
+## ⚠️ Canlı Ortam (Production) Entegrasyon Notları ve Checkpointing Kılavuzu
+
+Geliştirme ortamında (LocalStack) veya test süreçlerinde kolaylık amacıyla **`ShardIteratorType.LATEST`** tercih edilmiştir. Ancak canlıya geçiş sürecinde veri kaybı yaşamamak ve sistemin tutarlılığını garanti altına almak için aşağıdaki **checkpointing** ve iterator mimarisi kurgulanmalıdır:
+
+### 1. Neden Checkpoint Yapmalıyız?
+* **LATEST Riski**: Eğer tüketici servis (BackgroundService) kısa süreliğine çevrimdışı kalırsa, kapalı olduğu sürede Kinesis'e gelen tüm telemetri kayıtları **atlanır ve bir daha okunamaz**.
+* **TRIM_HORIZON Riski**: Servis her yeniden başladığında Kinesis'in saklama süresindeki (varsayılan 24 saat) tüm verileri en baştan okur. Bu durum mükerrer görev (`WorkflowTask`) oluşturma yüküne neden olur.
+
+### 2. KCL (Kinesis Client Library) Benzeri Checkpoint Tasarımı
+Canlı geçiş için .NET tarafında otonom checkpoint mekanizması şu şekilde uygulanmalıdır:
+1. **DynamoDB Checkpoint Tablosu**: `OmniPulse_KinesisCheckpoints` adında bir tablo açılır:
+   * **Partition Key (PK)**: `StreamName` (String)
+   * **Sort Key (SK)**: `ShardId` (String)
+   * **Özellikler**: `SequenceNumber` (String - Son başarılı işlenen kayıt), `LeaseOwner` (String - Hangi API instance'ı kilitledi), `LeaseExpiration` (Timestamp)
+2. **Okuma Başlangıcı**:
+   * Servis başladığında her shard için DynamoDB'den `SequenceNumber` değerini sorgular.
+   * Eğer o shard için kayıt **varsa**, `ShardIteratorType.AFTER_SEQUENCE_NUMBER` ve `StartingSequenceNumber = sequenceNumber` ile iterator oluşturulur.
+   * Kayıt **yoksa** (ilk kez okunuyorsa), `ShardIteratorType.TRIM_HORIZON` veya `LATEST` ile en baştan başlanır.
+3. **Mühürleme (Checkpointing)**:
+   * `ProcessRecordWithRetryAsync` metodu her `N` adet (örn. 50 adet) başarılı telemetri kaydı işlediğinde veya her `X` saniyede bir DynamoDB'deki ilgili satırı en son işlenen `SequenceNumber` ile günceller.
+   * Bu sayede uygulama crash olsa dahi, yeni başlayan instance kaldığı sıradan okumaya devam eder ve veri kaybı **0**'a indirgenir.
+
+### 3. Ölçeklenme ve Lease (Kilit) Yönetimi
+* Birden fazla API instance'ı çalıştığında (Horizontal Scaling), aynı shard'ın iki servis tarafından çift taraflı okunmasını engellemek için DynamoDB tablosundaki `LeaseOwner` ve `LeaseExpiration` alanları üzerinden **İyimser Kilit (Optimistic Lock)** mekanizması uygulanmalıdır.
+

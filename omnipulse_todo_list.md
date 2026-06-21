@@ -130,7 +130,10 @@ Geliştirme süresince tamamlanmış işler ve gelecek planları aşağıdaki gi
   - Aktif görevler (Task) listesi ve aksiyon tamamlama butonları.
 - [ ] **End-to-End Test Paketi**: Kimlik doğrulama, Ingestion ve Alarm tetikleme akışları için entegrasyon testlerinin hazırlanması.
 
+#### D. Canlı Ortam Hazırlığı (Production Readiness)
+- [ ] **Kinesis Checkpoint Mekanizması (KCL)**: Geliştirme ortamında kullanılan `LATEST` iterator tipi yerine, canlı ortamda veri kaybını önlemek adına DynamoDB tabanlı checkpointing (`AFTER_SEQUENCE_NUMBER` / `TRIM_HORIZON`) ve lease (kilit) yönetim yapısının entegre edilmesi.
+
 ---
-**Tarih:** 2026-06-21  
+**Tarih:** 2026-06-22  
 **Yazar:** Antigravity (MomoYuki)  
-**Durum:** %100 Uyumlu, Kinesis, SIEM, Asset Refactoring ve Workflow Entegrasyonu Tamamlandı. Geliştirme testlerine hazır.
+**Durum:** %100 Uyumlu, Kinesis GSI sorguları optimize edildi, Canlı Geçiş Notları eklendi. Geliştirme testlerine hazır.
