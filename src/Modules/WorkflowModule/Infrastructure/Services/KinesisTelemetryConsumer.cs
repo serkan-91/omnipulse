@@ -35,6 +35,7 @@ public class TelemetryEventPayload
     public string? Action { get; init; }
     public string? Message { get; init; }
     public bool? IsOnline { get; init; }
+    public string? TraceId { get; init; }
 }
 
 /// <summary>
@@ -44,6 +45,8 @@ public class TelemetryEventPayload
 /// </summary>
 public partial class KinesisTelemetryConsumer : BackgroundService
 {
+    private static readonly System.Diagnostics.ActivitySource ActivitySource = new("OmniPulse.WorkflowModule.KinesisTelemetryConsumer");
+
     private readonly IAmazonKinesis? _kinesis;
     private readonly IAmazonSQS? _sqs;
     private readonly IServiceProvider _serviceProvider;
@@ -224,158 +227,178 @@ public partial class KinesisTelemetryConsumer : BackgroundService
                 throw new InvalidDataException("Kinesis mesaj verisi boş veya geçersiz!");
             }
 
-            // 1. Güvenlik Olayı (Security Audit) Yönlendirme 🚨
-            if (string.Equals(payload.EventType, "SecurityAudit", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning("🚨 [SECURITY AUDIT] Action: {Action} | Device: {Serial} | Message: {Msg}",
-                    payload.Action, payload.DeviceSerialNumber, payload.Message);
+            // OpenTelemetry Dağıtık İzlenebilirlik (Distributed Tracing) ve APM Bağlama 🔗 OTel
+            var traceParent = payload.TraceId;
+            System.Diagnostics.Activity? activity = null;
 
-                if (_hubContext != null)
-                {
-                    var tenantGroup = payload.TenantId != Guid.Empty ? payload.TenantId.ToString() : "demo-tenant";
-                    await _hubContext.Clients.Groups(tenantGroup, "demo-tenant").SendAsync(
-                        "ReceiveSecurityAlert",
-                        new
-                        {
-                            payload.EventType,
-                            payload.Action,
-                            payload.DeviceSerialNumber,
-                            payload.Message,
-                            Timestamp = DateTime.UtcNow
-                        },
-                        cancellationToken
-                    );
-                }
-                return; // Workflow tetiklemeyi atla
+            if (!string.IsNullOrEmpty(traceParent) && System.Diagnostics.ActivityContext.TryParse(traceParent, null, out var parentContext))
+            {
+                activity = ActivitySource.StartActivity("ProcessKinesisRecord", System.Diagnostics.ActivityKind.Consumer, parentContext);
+            }
+            else
+            {
+                activity = ActivitySource.StartActivity("ProcessKinesisRecord", System.Diagnostics.ActivityKind.Consumer);
             }
 
-            // 2. Cihaz Durum Değişikliği (Device Connection) Yönlendirme 🔌
-            if (string.Equals(payload.EventType, "DeviceConnection", StringComparison.OrdinalIgnoreCase))
+            using (activity)
             {
-                _logger.LogInformation("[DEVICE CONNECTION] Device: {Serial} is now {Status}",
-                    payload.DeviceSerialNumber, payload.IsOnline == true ? "ONLINE" : "OFFLINE");
-
-                if (_hubContext != null)
+                var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? payload.TraceId ?? Guid.NewGuid().ToString();
+                using (_logger.BeginScope(new Dictionary<string, object> { ["TraceId"] = traceId }))
                 {
-                    var tenantGroup = payload.TenantId != Guid.Empty ? payload.TenantId.ToString() : "demo-tenant";
-                    await _hubContext.Clients.Groups(tenantGroup, "demo-tenant").SendAsync(
-                        "ReceiveDeviceStatus",
-                        new
-                        {
-                            payload.EventType,
-                            payload.DeviceSerialNumber,
-                            payload.IsOnline,
-                            payload.Message,
-                            Timestamp = DateTime.UtcNow
-                        },
-                        cancellationToken
-                    );
-                }
-                return; // Workflow tetiklemeyi atla
-            }
-
-            var eventsToProcess = new List<ProcessTelemetryEventCommand>();
-
-            if (!string.IsNullOrEmpty(payload.TelemetryKey))
-            {
-                // Standart/Jenerik Telemetri formatı
-                // CihazID ve Zaman damgasından üretilen deterministik EventId sayesinde mükerrer telemetriler yakalanır! 🛡️
-                var eventId = payload.EventId;
-                if (string.IsNullOrEmpty(eventId))
-                {
-                    var ts = payload.Timestamp ?? DateTime.UtcNow;
-                    eventId = $"GEN-{payload.DeviceId}-{ts:yyyyMMddHHmmss}";
-                }
-
-                eventsToProcess.Add(new ProcessTelemetryEventCommand(
-                    TenantId: payload.TenantId,
-                    DeviceId: payload.DeviceId,
-                    TelemetryKey: payload.TelemetryKey,
-                    TelemetryValue: payload.TelemetryValue ?? 0.0,
-                    SourceEventId: eventId
-                ));
-            }
-            else if (payload.Temperature.HasValue || payload.Pressure.HasValue)
-            {
-                // IoT Modülü spesifik formatı (Sıcaklık ve Basınç alanları içeren paket)
-                var eventIdBase = payload.TelemetryId?.ToString();
-                if (string.IsNullOrEmpty(eventIdBase))
-                {
-                    var ts = payload.Timestamp ?? DateTime.UtcNow;
-                    eventIdBase = $"{payload.DeviceId}-{ts:yyyyMMddHHmmss}";
-                }
-
-                if (payload.Temperature.HasValue)
-                {
-                    eventsToProcess.Add(new ProcessTelemetryEventCommand(
-                        TenantId: payload.TenantId,
-                        DeviceId: payload.DeviceId,
-                        TelemetryKey: "temperature",
-                        TelemetryValue: payload.Temperature.Value,
-                        SourceEventId: $"TEMP-{eventIdBase}"
-                    ));
-                }
-
-                if (payload.Pressure.HasValue)
-                {
-                    eventsToProcess.Add(new ProcessTelemetryEventCommand(
-                        TenantId: payload.TenantId,
-                        DeviceId: payload.DeviceId,
-                        TelemetryKey: "pressure",
-                        TelemetryValue: payload.Pressure.Value,
-                        SourceEventId: $"PRES-{eventIdBase}"
-                    ));
-                }
-            }
-
-            foreach (var command in eventsToProcess)
-            {
-                // ─── Tüketici (Consumer) Seviyesinde Mükerrer Kayıt Filtreleme (Idempotency Layer) 🛡️ ───
-                using var scope = _serviceProvider.CreateScope();
-                var taskStore = scope.ServiceProvider.GetRequiredService<IWorkflowTaskStore>();
-
-                var isDuplicate = await taskStore.HasEventBeenProcessedAsync(command.TenantId, command.SourceEventId, cancellationToken);
-                if (isDuplicate)
-                {
-                    _logger.LogInformation("⏭️ [KinesisConsumer] Mükerrer telemetri paketi elendi. Cihaz: {DeviceId}, Olay: {EventId}",
-                        command.DeviceId, command.SourceEventId);
-                    continue; // İşleme girmeden (SignalR ve MediatR tetiklemeden) atla!
-                }
-
-                // Canlı izleme paneli için telemetriyi SignalR üzerinden yayınla 📊⚡
-                if (_hubContext != null)
-                {
-                    var groups = new[] { command.TenantId.ToString(), "demo-tenant" };
-                    await _hubContext.Clients.Groups(groups).SendAsync(
-                        "ReceiveTelemetry",
-                        new
-                        {
-                            DeviceId = command.DeviceId,
-                            TelemetryKey = command.TelemetryKey,
-                            TelemetryValue = command.TelemetryValue,
-                            Timestamp = DateTime.UtcNow
-                        },
-                        cancellationToken
-                    );
-                }
-
-                const int maxRetryAttempts = 3;
-                int attempt = 0;
-
-                while (true)
-                {
-                    try
+                    // 1. Güvenlik Olayı (Security Audit) Yönlendirme 🚨
+                    if (string.Equals(payload.EventType, "SecurityAudit", StringComparison.OrdinalIgnoreCase))
                     {
-                        attempt++;
-                        var mediator = scope.ServiceProvider.GetRequiredService<ISender>();
+                        _logger.LogWarning("🚨 [SECURITY AUDIT] Action: {Action} | Device: {Serial} | Message: {Msg}",
+                            payload.Action, payload.DeviceSerialNumber, payload.Message);
 
-                        await mediator.Send(command, cancellationToken);
-                        break; // Başarılı, döngüden çık
+                        if (_hubContext != null)
+                        {
+                            var tenantGroup = payload.TenantId != Guid.Empty ? payload.TenantId.ToString() : "demo-tenant";
+                            await _hubContext.Clients.Groups(tenantGroup, "demo-tenant").SendAsync(
+                                "ReceiveSecurityAlert",
+                                new
+                                {
+                                    payload.EventType,
+                                    payload.Action,
+                                    payload.DeviceSerialNumber,
+                                    payload.Message,
+                                    Timestamp = DateTime.UtcNow
+                                },
+                                cancellationToken
+                            );
+                        }
+                        return; // Workflow tetiklemeyi atla
                     }
-                    catch (Exception ex) when (attempt < maxRetryAttempts && !cancellationToken.IsCancellationRequested)
+
+                    // 2. Cihaz Durum Değişikliği (Device Connection) Yönlendirme 🔌
+                    if (string.Equals(payload.EventType, "DeviceConnection", StringComparison.OrdinalIgnoreCase))
                     {
-                        LogProcessRecordRetryWarning(ex, attempt, maxRetryAttempts);
-                        await Task.Delay(attempt * 500, cancellationToken); // Artan bekleme süresi
+                        _logger.LogInformation("[DEVICE CONNECTION] Device: {Serial} is now {Status}",
+                            payload.DeviceSerialNumber, payload.IsOnline == true ? "ONLINE" : "OFFLINE");
+
+                        if (_hubContext != null)
+                        {
+                            var tenantGroup = payload.TenantId != Guid.Empty ? payload.TenantId.ToString() : "demo-tenant";
+                            await _hubContext.Clients.Groups(tenantGroup, "demo-tenant").SendAsync(
+                                "ReceiveDeviceStatus",
+                                new
+                                {
+                                    payload.EventType,
+                                    payload.DeviceSerialNumber,
+                                    payload.IsOnline,
+                                    payload.Message,
+                                    Timestamp = DateTime.UtcNow
+                                },
+                                cancellationToken
+                            );
+                        }
+                        return; // Workflow tetiklemeyi atla
+                    }
+
+                    var eventsToProcess = new List<ProcessTelemetryEventCommand>();
+
+                    if (!string.IsNullOrEmpty(payload.TelemetryKey))
+                    {
+                        // Standart/Jenerik Telemetri formatı
+                        // CihazID ve Zaman damgasından üretilen deterministik EventId sayesinde mükerrer telemetriler yakalanır! 🛡️
+                        var eventId = payload.EventId;
+                        if (string.IsNullOrEmpty(eventId))
+                        {
+                            var ts = payload.Timestamp ?? DateTime.UtcNow;
+                            eventId = $"GEN-{payload.DeviceId}-{ts:yyyyMMddHHmmss}";
+                        }
+
+                        eventsToProcess.Add(new ProcessTelemetryEventCommand(
+                            TenantId: payload.TenantId,
+                            DeviceId: payload.DeviceId,
+                            TelemetryKey: payload.TelemetryKey,
+                            TelemetryValue: payload.TelemetryValue ?? 0.0,
+                            SourceEventId: eventId
+                        ));
+                    }
+                    else if (payload.Temperature.HasValue || payload.Pressure.HasValue)
+                    {
+                        // IoT Modülü spesifik formatı (Sıcaklık ve Basınç alanları içeren paket)
+                        var eventIdBase = payload.TelemetryId?.ToString();
+                        if (string.IsNullOrEmpty(eventIdBase))
+                        {
+                            var ts = payload.Timestamp ?? DateTime.UtcNow;
+                            eventIdBase = $"{payload.DeviceId}-{ts:yyyyMMddHHmmss}";
+                        }
+
+                        if (payload.Temperature.HasValue)
+                        {
+                            eventsToProcess.Add(new ProcessTelemetryEventCommand(
+                                TenantId: payload.TenantId,
+                                DeviceId: payload.DeviceId,
+                                TelemetryKey: "temperature",
+                                TelemetryValue: payload.Temperature.Value,
+                                SourceEventId: $"TEMP-{eventIdBase}"
+                            ));
+                        }
+
+                        if (payload.Pressure.HasValue)
+                        {
+                            eventsToProcess.Add(new ProcessTelemetryEventCommand(
+                                TenantId: payload.TenantId,
+                                DeviceId: payload.DeviceId,
+                                TelemetryKey: "pressure",
+                                TelemetryValue: payload.Pressure.Value,
+                                SourceEventId: $"PRES-{eventIdBase}"
+                            ));
+                        }
+                    }
+
+                    foreach (var command in eventsToProcess)
+                    {
+                        // ─── Tüketici (Consumer) Seviyesinde Mükerrer Kayıt Filtreleme (Idempotency Layer) 🛡️ ───
+                        using var scope = _serviceProvider.CreateScope();
+                        var taskStore = scope.ServiceProvider.GetRequiredService<IWorkflowTaskStore>();
+
+                        var isDuplicate = await taskStore.HasEventBeenProcessedAsync(command.TenantId, command.SourceEventId, cancellationToken);
+                        if (isDuplicate)
+                        {
+                            _logger.LogInformation("⏭️ [KinesisConsumer] Mükerrer telemetri paketi elendi. Cihaz: {DeviceId}, Olay: {EventId}",
+                                command.DeviceId, command.SourceEventId);
+                            continue; // İşleme girmeden (SignalR ve MediatR tetiklemeden) atla!
+                        }
+
+                        // Canlı izleme paneli için telemetriyi SignalR üzerinden yayınla 📊⚡
+                        if (_hubContext != null)
+                        {
+                            var groups = new[] { command.TenantId.ToString(), "demo-tenant" };
+                            await _hubContext.Clients.Groups(groups).SendAsync(
+                                "ReceiveTelemetry",
+                                new
+                                {
+                                    DeviceId = command.DeviceId,
+                                    TelemetryKey = command.TelemetryKey,
+                                    TelemetryValue = command.TelemetryValue,
+                                    Timestamp = DateTime.UtcNow
+                                },
+                                cancellationToken
+                            );
+                        }
+
+                        const int maxRetryAttempts = 3;
+                        int attempt = 0;
+
+                        while (true)
+                        {
+                            try
+                            {
+                                attempt++;
+                                var mediator = scope.ServiceProvider.GetRequiredService<ISender>();
+
+                                await mediator.Send(command, cancellationToken);
+                                break; // Başarılı, döngüden çık
+                            }
+                            catch (Exception ex) when (attempt < maxRetryAttempts && !cancellationToken.IsCancellationRequested)
+                            {
+                                LogProcessRecordRetryWarning(ex, attempt, maxRetryAttempts);
+                                await Task.Delay(attempt * 500, cancellationToken); // Artan bekleme süresi
+                            }
+                        }
                     }
                 }
             }

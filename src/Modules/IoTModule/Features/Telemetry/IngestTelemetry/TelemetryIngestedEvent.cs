@@ -9,5 +9,6 @@ public record TelemetryIngestedEvent(
     string DeviceName,
     double Temperature,
     double Pressure,
-    DateTime Timestamp
+    DateTime Timestamp,
+    string? TraceId = null
 ) : INotification;

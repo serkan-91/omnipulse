@@ -20,6 +20,7 @@ public class ReportDeviceStatusCommandHandler(
         try
         {
             var serialNumber = request.DeviceId.ToUpperInvariant().Trim();
+            var currentTraceId = System.Diagnostics.Activity.Current?.Id ?? Guid.NewGuid().ToString();
 
             // 1. Cihazı seri numarasıyla veritabanında arıyoruz
             var device = await dbContext.Devices
@@ -39,7 +40,8 @@ public class ReportDeviceStatusCommandHandler(
                         Action = "UnknownDeviceConnectionAttempt",
                         DeviceSerialNumber = serialNumber,
                         Message = $"Sistemde kayıtlı olmayan bir cihaz bağlantı kurmaya çalıştı: {serialNumber}",
-                        Timestamp = DateTime.UtcNow
+                        Timestamp = DateTime.UtcNow,
+                        TraceId = currentTraceId
                     }),
                     partitionKey: serialNumber
                 );
@@ -68,7 +70,8 @@ public class ReportDeviceStatusCommandHandler(
                         DeviceSerialNumber = device.SerialNumber,
                         TenantId = device.TenantId,
                         Message = $"Pasif/askıya alınmış bir cihaz bağlantı kurmaya çalıştı: {device.Name} ({device.SerialNumber})",
-                        Timestamp = DateTime.UtcNow
+                        Timestamp = DateTime.UtcNow,
+                        TraceId = currentTraceId
                     }),
                     partitionKey: device.SerialNumber
                 );
@@ -93,7 +96,8 @@ public class ReportDeviceStatusCommandHandler(
                     TenantId = device.TenantId,
                     IsOnline = request.IsOnline,
                     Message = $"Cihaz bağlantı durumu değişti: {device.Name} -> {(request.IsOnline ? "ONLINE" : "OFFLINE")}",
-                    Timestamp = request.Timestamp
+                    Timestamp = request.Timestamp,
+                    TraceId = currentTraceId
                 }),
                 partitionKey: device.SerialNumber
             );

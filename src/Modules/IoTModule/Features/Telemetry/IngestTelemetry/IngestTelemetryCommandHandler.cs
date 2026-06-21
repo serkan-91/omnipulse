@@ -25,6 +25,7 @@ public class IngestTelemetryCommandHandler(
         try
         {
             var serialNumber = request.DeviceId.ToUpperInvariant().Trim();
+            var currentTraceId = System.Diagnostics.Activity.Current?.Id ?? Guid.NewGuid().ToString();
 
             // 1. Cihazı seri numarasıyla tüm sistemde (kiracı kısıtlamasını aşarak) arıyoruz
             var device = await dbContext.Devices
@@ -44,7 +45,8 @@ public class IngestTelemetryCommandHandler(
                         Action = "UnknownDeviceAttempt",
                         DeviceSerialNumber = serialNumber,
                         Message = $"Sistemde kayıtlı olmayan cihazdan telemetri gönderilmeye çalışıldı: {serialNumber}",
-                        Timestamp = DateTime.UtcNow
+                        Timestamp = DateTime.UtcNow,
+                        TraceId = currentTraceId
                     }),
                     partitionKey: serialNumber
                 );
@@ -73,7 +75,8 @@ public class IngestTelemetryCommandHandler(
                         DeviceSerialNumber = device.SerialNumber,
                         TenantId = device.TenantId,
                         Message = $"Pasif/engellenmiş cihazdan veri akışı denendi: {device.Name} ({device.SerialNumber})",
-                        Timestamp = DateTime.UtcNow
+                        Timestamp = DateTime.UtcNow,
+                        TraceId = currentTraceId
                     }),
                     partitionKey: device.SerialNumber
                 );
@@ -109,7 +112,8 @@ public class IngestTelemetryCommandHandler(
                     TenantId = device.TenantId,
                     telemetry.Temperature,
                     telemetry.Pressure,
-                    telemetry.Timestamp
+                    telemetry.Timestamp,
+                    TraceId = currentTraceId
                 }),
                 partitionKey: device.SerialNumber
             );
@@ -126,7 +130,8 @@ public class IngestTelemetryCommandHandler(
                 device.Name,
                 request.Temperature,
                 request.Pressure,
-                request.Timestamp
+                request.Timestamp,
+                TraceId: currentTraceId
             ), cancellationToken);
 
             return new IngestTelemetryResponse(
