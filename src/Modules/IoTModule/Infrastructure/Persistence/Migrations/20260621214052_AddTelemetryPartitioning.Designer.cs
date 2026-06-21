@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using OmniPulse.Modules.IoTModule.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using OmniPulse.Modules.IoTModule.Infrastructure.Persistence;
 namespace OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(IoTDbContext))]
-    partial class IoTDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260621214052_AddTelemetryPartitioning")]
+    partial class AddTelemetryPartitioning
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

@@ -10,7 +10,7 @@ public class TelemetryConfiguration : IEntityTypeConfiguration<Telemetry>
     {
         builder.ToTable("Telemetry");
 
-        builder.HasKey(t => t.Id);
+        builder.HasKey(t => new { t.Id, t.Timestamp });
 
         builder.Property(t => t.TenantId)
             .IsRequired();

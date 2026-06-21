@@ -31,6 +31,7 @@ public static class DependencyInjection
         services.AddScoped<OmniPulse.BuildingBlocks.Interfaces.IIotAssetService, Infrastructure.Services.IotAssetService>();
         services.AddHostedService<Features.Alarms.TelemetryAlarmBackgroundProcessor>();
         services.AddHostedService<Infrastructure.Services.OutboxEventProcessor>();
+        services.AddHostedService<Infrastructure.Services.PostgresPartitionManager>();
 
         // AWS Kinesis IAmazonKinesis İstemcisi ve Yayıncı Kaydı (LocalStack veya Canlı AWS)
         var kinesisSection = configuration.GetSection("AWS:Kinesis");
