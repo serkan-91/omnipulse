@@ -19,8 +19,23 @@ services:
       - omnipulse-network
     restart: always
 
+  omnipulse-localstack:
+    image: localstack/localstack:3.8.0
+    container_name: omnipulse-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=kinesis,dynamodb,sqs
+      - DEFAULT_REGION=us-east-1
+    volumes:
+      - localstack_data:/var/lib/localstack
+    networks:
+      - omnipulse-network
+    restart: always
+
 volumes:
   postgres_data:
+  localstack_data:
 
 networks:
   omnipulse-network:

@@ -5,11 +5,17 @@ using OmniPulse.BuildingBlocks.Interfaces;
 
 namespace OmniPulse.Identity.API.Services;
 
-public class ConsoleEmailSender(ILogger<ConsoleEmailSender> logger) : IEmailSender
+public partial class ConsoleEmailSender(ILogger<ConsoleEmailSender> logger) : IEmailSender
 {
     public Task SendEmailAsync(string to, string subject, string body)
     {
-        logger.LogInformation("""
+        LogEPosta(to, subject, DateTime.UtcNow, body);
+
+        return Task.CompletedTask;
+    }
+
+    [LoggerMessage(LogLevel.Information,
+    """
             ================================================================================
             📧 E-POSTA BİLDİRİMİ GÖNDERİLDİ!
             --------------------------------------------------------------------------------
@@ -17,11 +23,9 @@ public class ConsoleEmailSender(ILogger<ConsoleEmailSender> logger) : IEmailSend
             Konu    : {Subject}
             Zaman   : {DateTime}
             Gönderilen İçerik:
-            
+
             {Body}
             ================================================================================
-            """, to, subject, DateTime.UtcNow, body);
-
-        return Task.CompletedTask;
-    }
+            """)]
+    partial void LogEPosta(string to, string subject, DateTime dateTime, string body);
 }

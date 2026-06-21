@@ -147,10 +147,134 @@ namespace OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Migrations
                     b.ToTable("AlarmRules", (string)null);
                 });
 
+            modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Asset", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeletedBy")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LastModifiedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastModifiedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("MetadataJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ParentAssetId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ResponsibleRole")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ResponsibleUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentAssetId");
+
+                    b.HasIndex("ResponsibleUserId");
+
+                    b.HasIndex("TenantId", "Type");
+
+                    b.ToTable("Assets", (string)null);
+                });
+
+            modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.AssetPermission", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AssetId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeletedBy")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LastModifiedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastModifiedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("AssetId", "Role");
+
+                    b.ToTable("AssetPermissions", (string)null);
+                });
+
             modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Device", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AssetId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid?>("CategoryId")
@@ -197,14 +321,11 @@ namespace OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("VehicleId")
-                        .HasColumnType("uuid");
-
                     b.HasKey("Id");
 
-                    b.HasIndex("CategoryId");
+                    b.HasIndex("AssetId");
 
-                    b.HasIndex("VehicleId");
+                    b.HasIndex("CategoryId");
 
                     b.HasIndex("TenantId", "SerialNumber")
                         .IsUnique();
@@ -308,61 +429,6 @@ namespace OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Migrations
                     b.ToTable("Telemetry", (string)null);
                 });
 
-            modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Vehicle", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Brand")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("CreatedBy")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<DateTime?>("DeletedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DeletedBy")
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("DriverUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime?>("LastModifiedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LastModifiedBy")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<string>("PlateNumber")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DriverUserId");
-
-                    b.HasIndex("TenantId", "PlateNumber")
-                        .IsUnique();
-
-                    b.ToTable("Vehicles", (string)null);
-                });
-
             modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.AlarmEvent", b =>
                 {
                     b.HasOne("OmniPulse.Modules.IoTModule.Domain.Entities.AlarmRule", "AlarmRule")
@@ -392,21 +458,42 @@ namespace OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Migrations
                     b.Navigation("Device");
                 });
 
+            modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Asset", b =>
+                {
+                    b.HasOne("OmniPulse.Modules.IoTModule.Domain.Entities.Asset", "ParentAsset")
+                        .WithMany("Children")
+                        .HasForeignKey("ParentAssetId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ParentAsset");
+                });
+
+            modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.AssetPermission", b =>
+                {
+                    b.HasOne("OmniPulse.Modules.IoTModule.Domain.Entities.Asset", "Asset")
+                        .WithMany("Permissions")
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Asset");
+                });
+
             modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Device", b =>
                 {
+                    b.HasOne("OmniPulse.Modules.IoTModule.Domain.Entities.Asset", "Asset")
+                        .WithMany("Devices")
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("OmniPulse.Modules.IoTModule.Domain.Entities.DeviceCategory", "Category")
                         .WithMany("Devices")
                         .HasForeignKey("CategoryId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("OmniPulse.Modules.IoTModule.Domain.Entities.Vehicle", "Vehicle")
-                        .WithMany("Devices")
-                        .HasForeignKey("VehicleId")
-                        .OnDelete(DeleteBehavior.SetNull);
+                    b.Navigation("Asset");
 
                     b.Navigation("Category");
-
-                    b.Navigation("Vehicle");
                 });
 
             modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.DeviceCategory", b =>
@@ -430,6 +517,15 @@ namespace OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Migrations
                     b.Navigation("Device");
                 });
 
+            modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Asset", b =>
+                {
+                    b.Navigation("Children");
+
+                    b.Navigation("Devices");
+
+                    b.Navigation("Permissions");
+                });
+
             modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Device", b =>
                 {
                     b.Navigation("Telemetries");
@@ -440,11 +536,6 @@ namespace OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Migrations
                     b.Navigation("Devices");
 
                     b.Navigation("SubCategories");
-                });
-
-            modelBuilder.Entity("OmniPulse.Modules.IoTModule.Domain.Entities.Vehicle", b =>
-                {
-                    b.Navigation("Devices");
                 });
 #pragma warning restore 612, 618
         }

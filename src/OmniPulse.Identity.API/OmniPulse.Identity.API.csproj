@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles> 
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,13 +14,16 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Scalar.AspNetCore" Version="2.16.4" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.1" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\BuildingBlocks\OmniPulse.BuildingBlocks.csproj" />
     <ProjectReference Include="..\Modules\TenantModule\TenantModule.csproj" />
     <ProjectReference Include="..\Modules\IoTModule\IoTModule.csproj" />
+    <ProjectReference Include="..\Modules\WorkflowModule\WorkflowModule.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,29 +1,63 @@
-using System;
-using System.Linq;
+using Microsoft.EntityFrameworkCore;
 using OmniPulse.BuildingBlocks.Interfaces;
 using OmniPulse.Modules.IoTModule.Domain.Entities;
+using OmniPulse.Modules.IoTModule.Infrastructure.Persistence;
+using System;
+using System.Linq;
 
 namespace OmniPulse.Modules.IoTModule.Features.Telemetry;
 
 /// <summary>
-/// Telemetri sorguları üzerinde sürücü kısıtlamalarını (ABAC) tek noktadan yöneten
-/// ve Clean Architecture prensiplerine uygun, tekrar kullanılabilir uzantı metotları! 🚛🛡️
+/// Telemetri sorguları üzerinde varlık-tabanlı erişim kısıtlamalarını (ABAC) tek noktadan yöneten
+/// ve Clean Architecture prensiplerine uygun, PostgreSQL Recursive CTE destekli uzantı metotları! 🏭🚛🛡️
 /// </summary>
 public static class TelemetryQueryExtensions
 {
-    public static IQueryable<Domain.Entities.Telemetry> ApplyDriverFilter(
+    public static IQueryable<Domain.Entities.Telemetry> ApplyAssetFilter(
         this IQueryable<Domain.Entities.Telemetry> query, 
-        IUserTenantContext userTenantContext)
+        IUserTenantContext userTenantContext,
+        IoTDbContext dbContext)
     {
-        var isDriver = userTenantContext.Roles.Contains("Driver", StringComparer.OrdinalIgnoreCase) || 
-                       userTenantContext.Roles.Contains("Sürücü", StringComparer.OrdinalIgnoreCase);
+        // Sürücü, saha çalışanı veya operatör yalnızca sorumlu olduğu varlığın telemetrilerini görebilir
+        var isFieldUser = 
+            userTenantContext.Roles.Contains("Driver", StringComparer.OrdinalIgnoreCase) || 
+            userTenantContext.Roles.Contains("Sürücü", StringComparer.OrdinalIgnoreCase) ||
+            userTenantContext.Roles.Contains("FieldWorker", StringComparer.OrdinalIgnoreCase) ||
+            userTenantContext.Roles.Contains("Operator", StringComparer.OrdinalIgnoreCase);
 
-        if (isDriver)
+        if (isFieldUser)
         {
-            if (Guid.TryParse(userTenantContext.UserId, out var driverUserId))
+            if (Guid.TryParse(userTenantContext.UserId, out var userId))
             {
-                // Sürücü yalnızca kendisine zimmetli araca takılı cihazların telemetrilerini görebilir!
-                return query.Where(t => t.Device.Vehicle != null && t.Device.Vehicle.DriverUserId == driverUserId);
+                // PostgreSQL'de Recursive CTE kullanarak kullanıcının yetkili olduğu tüm varlıkları (alt dallar dahil) bulur.
+                // Hem yeni AssetPermissions tablosunu hem de eski ResponsibleUserId kolonunu destekler.
+                var allowedAssets = dbContext.Assets.FromSqlRaw(@"
+                    WITH RECURSIVE AllowedAssets AS (
+                        -- 1. AssetPermissions tablosundan kullanıcının rolleri
+                        SELECT ap.""AssetId"" AS ""Id""
+                        FROM ""AssetPermissions"" ap
+                        WHERE ap.""UserId"" = {0} AND ap.""IsDeleted"" = false
+                        
+                        UNION
+                        
+                        -- 2. Eski Asset.ResponsibleUserId alanından geri dönük uyumluluk
+                        SELECT a.""Id""
+                        FROM ""Assets"" a
+                        WHERE a.""ResponsibleUserId"" = {0} AND a.""IsDeleted"" = false
+                        
+                        UNION
+                        
+                        -- 3. Hiyerarşik olarak alt varlıkları (çocuk dalları) bul
+                        SELECT child.""Id""
+                        FROM ""Assets"" child
+                        INNER JOIN AllowedAssets parent ON child.""ParentAssetId"" = parent.""Id""
+                        WHERE child.""IsDeleted"" = false
+                    )
+                    SELECT * FROM ""Assets"" WHERE ""Id"" IN (SELECT ""Id"" FROM AllowedAssets)
+                ", userId);
+
+                // Telemetriyi, cihazın bağlı olduğu varlık bu izinli varlıklar listesindeyse getir
+                return query.Where(t => t.Device.AssetId.HasValue && allowedAssets.Any(a => a.Id == t.Device.AssetId.Value));
             }
             
             // Güvenlik: Kimlik doğrulanamadıysa veri akışını tamamen kes!

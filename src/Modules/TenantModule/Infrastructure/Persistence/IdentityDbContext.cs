@@ -33,13 +33,13 @@ public class IdentityDbContext(
 
     public override int SaveChanges()
     {
-        this.ApplyAuditingAndSoftDelete(userTenantContext);
+        DbContextExtensions.ApplyAuditingAndSoftDelete(this, userTenantContext);
         return base.SaveChanges();
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        this.ApplyAuditingAndSoftDelete(userTenantContext);
+        DbContextExtensions.ApplyAuditingAndSoftDelete(this, userTenantContext);
         return base.SaveChangesAsync(cancellationToken);
     }
 

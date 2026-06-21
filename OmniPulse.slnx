@@ -9,4 +9,7 @@
   <Folder Name="/src/Modules/TenantModule/">
     <Project Path="src/Modules/TenantModule/TenantModule.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/WorkflowModule/">
+    <Project Path="src/Modules/WorkflowModule/WorkflowModule.csproj" />
+  </Folder>
 </Solution>

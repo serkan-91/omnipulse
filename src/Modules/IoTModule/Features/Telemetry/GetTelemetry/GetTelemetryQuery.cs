@@ -6,7 +6,7 @@ namespace OmniPulse.Modules.IoTModule.Features.Telemetry.GetTelemetry;
 
 public record GetTelemetryQuery(
     Guid? DeviceId = null,
-    Guid? VehicleId = null,
+    Guid? AssetId = null,
     DateTime? StartDate = null,
     DateTime? EndDate = null,
     int Page = 1,
@@ -25,8 +25,8 @@ public record TelemetryDto(
     Guid DeviceId,
     string DeviceName,
     string DeviceSerialNumber,
-    Guid? VehicleId,
-    string? VehiclePlateNumber,
+    Guid? AssetId,
+    string? AssetName,
     double Temperature,
     double Pressure,
     DateTime Timestamp

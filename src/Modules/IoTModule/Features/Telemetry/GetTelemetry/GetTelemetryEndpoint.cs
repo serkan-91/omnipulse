@@ -13,7 +13,7 @@ public static class GetTelemetryEndpoint
     {
         app.MapGet("api/iot/telemetry", async (
                 [FromQuery] Guid? deviceId,
-                [FromQuery] Guid? vehicleId,
+                [FromQuery] Guid? assetId,
                 [FromQuery] DateTime? startDate,
                 [FromQuery] DateTime? endDate,
                 [FromQuery] int page,
@@ -22,7 +22,7 @@ public static class GetTelemetryEndpoint
             {
                 var query = new GetTelemetryQuery(
                     DeviceId: deviceId,
-                    VehicleId: vehicleId,
+                    AssetId: assetId,
                     StartDate: startDate,
                     EndDate: endDate,
                     Page: page > 0 ? page : 1,

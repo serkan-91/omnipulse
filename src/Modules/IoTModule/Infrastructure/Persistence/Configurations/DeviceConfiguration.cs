@@ -27,11 +27,11 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .IsRequired()
             .HasDefaultValue(true);
 
-        // Bir cihaz/sensör sadece bir araca bağlı olabilir
-        builder.HasOne(d => d.Vehicle)
-            .WithMany(v => v.Devices)
-            .HasForeignKey(d => d.VehicleId)
-            .OnDelete(DeleteBehavior.SetNull);
+        // Bir cihaz/sensör sadece bir varlığa bağlı olabilir (araç, bant, dolap, vb.)
+        builder.HasOne(d => d.Asset)
+            .WithMany(a => a.Devices)
+            .HasForeignKey(d => d.AssetId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         // Bir cihaz/sensör sadece bir kategoride olabilir
         builder.HasOne(d => d.Category)

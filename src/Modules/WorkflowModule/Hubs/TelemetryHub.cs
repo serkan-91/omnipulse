@@ -1,0 +1,33 @@
+using System;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
+
+namespace OmniPulse.Modules.WorkflowModule.Hubs;
+
+/// <summary>
+/// IoT cihazlarından gelen telemetri verilerini ön yüze (omnipulse-ui) anlık olarak
+/// yayınlayan SignalR Hub'ı! 📊⚡
+/// Kiracı izolasyonu (TenantId) sayesinde veriler sadece ilgili kiracının yetkili istemcilerine gider.
+/// </summary>
+public class TelemetryHub : Hub
+{
+    public override async Task OnConnectedAsync()
+    {
+        var tenantIdClaim = Context.User?.FindFirst("tid")?.Value 
+                            ?? Context.User?.FindFirst("tenant_id")?.Value;
+
+        if (Guid.TryParse(tenantIdClaim, out var tenantId))
+        {
+            // Kullanıcıyı kendi kiracı grubuna ekle 🛡️
+            await Groups.AddToGroupAsync(Context.ConnectionId, tenantId.ToString());
+        }
+        else
+        {
+            // Demo/Misafir bağlantıları için ortak gruba ekle 🔓
+            await Groups.AddToGroupAsync(Context.ConnectionId, "demo-tenant");
+        }
+
+        await base.OnConnectedAsync();
+    }
+}

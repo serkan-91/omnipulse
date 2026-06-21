@@ -49,30 +49,53 @@ public class GetTelemetryReportQueryHandler(
             parameters.Add("DeviceId", request.DeviceId.Value);
         }
 
-        if (request.VehicleId.HasValue)
+        if (request.AssetId.HasValue)
         {
-            conditions.Add("d.\"VehicleId\" = @VehicleId");
-            parameters.Add("VehicleId", request.VehicleId.Value);
+            conditions.Add("d.\"AssetId\" = @AssetId");
+            parameters.Add("AssetId", request.AssetId.Value);
         }
 
-        // 3. Sürücü/Driver Satır Bazlı Filtreleme (ABAC) 🚛
-        var isDriver = userTenantContext.Roles.Contains("Driver", StringComparer.OrdinalIgnoreCase) || 
-                       userTenantContext.Roles.Contains("Sürücü", StringComparer.OrdinalIgnoreCase);
+        // 3. Saha Kullanıcısı (Driver/FieldWorker/Operator) Satır Bazlı Filtreleme (ABAC) 🏭
+        var isFieldUser = 
+            userTenantContext.Roles.Contains("Driver", StringComparer.OrdinalIgnoreCase) || 
+            userTenantContext.Roles.Contains("Sürücü", StringComparer.OrdinalIgnoreCase) ||
+            userTenantContext.Roles.Contains("FieldWorker", StringComparer.OrdinalIgnoreCase) ||
+            userTenantContext.Roles.Contains("Operator", StringComparer.OrdinalIgnoreCase);
 
-        if (isDriver)
+        if (isFieldUser)
         {
-            if (Guid.TryParse(userTenantContext.UserId, out var driverUserId))
+            if (Guid.TryParse(userTenantContext.UserId, out var responsibleUserId))
             {
-                conditions.Add("v.\"DriverUserId\" = @DriverUserId");
-                parameters.Add("DriverUserId", driverUserId);
+                conditions.Add(@"a.""Id"" IN (
+                    WITH RECURSIVE AllowedAssets AS (
+                        SELECT ap.""AssetId"" AS ""Id""
+                        FROM ""AssetPermissions"" ap
+                        WHERE ap.""UserId"" = @ResponsibleUserId AND ap.""IsDeleted"" = false
+                        
+                        UNION
+                        
+                        SELECT ass.""Id""
+                        FROM ""Assets"" ass
+                        WHERE ass.""ResponsibleUserId"" = @ResponsibleUserId AND ass.""IsDeleted"" = false
+                        
+                        UNION
+                        
+                        SELECT child.""Id""
+                        FROM ""Assets"" child
+                        INNER JOIN AllowedAssets parent ON child.""ParentAssetId"" = parent.""Id""
+                        WHERE child.""IsDeleted"" = false
+                    )
+                    SELECT ""Id"" FROM AllowedAssets
+                )");
+                parameters.Add("ResponsibleUserId", responsibleUserId);
             }
             else
             {
-                // Sürücü kimliği çözülemediyse güvenli olarak veri döndürme
+                // Kimlik çözülemediyse güvenli olarak veri döndürme
                 return new TelemetryReportDto(
                     MinValue: 0, MaxValue: 0, AverageValue: 0, TotalCount: 0, BreachCount: 0, BreachPercentage: 0,
                     BreachedPoints: new List<BreachPointDto>(),
-                    Message: "Sürücü kimliği doğrulanamadı!"
+                    Message: "Kullanıcı kimliği doğrulanamadı!"
                 );
             }
         }
@@ -96,7 +119,7 @@ public class GetTelemetryReportQueryHandler(
                 COUNT(t.""Id"") as TotalCount
             FROM ""Telemetry"" t
             INNER JOIN ""Devices"" d ON t.""DeviceId"" = d.""Id"" AND d.""IsDeleted"" = false
-            LEFT JOIN ""Vehicles"" v ON d.""VehicleId"" = v.""Id"" AND v.""IsDeleted"" = false
+            LEFT JOIN ""Assets"" a ON d.""AssetId"" = a.""Id"" AND a.""IsDeleted"" = false
             WHERE t.""TenantId"" = @TenantId
               AND t.""Timestamp"" >= @StartDate
               AND t.""Timestamp"" <= @EndDate
@@ -120,13 +143,13 @@ public class GetTelemetryReportQueryHandler(
                 t.""Id"",
                 t.""DeviceId"",
                 d.""Name"" as DeviceName,
-                v.""PlateNumber"" as VehiclePlateNumber,
+                a.""Name"" as AssetName,
                 t.""{metricCol}"" as Value,
                 @Threshold as Threshold,
                 t.""Timestamp""
             FROM ""Telemetry"" t
             INNER JOIN ""Devices"" d ON t.""DeviceId"" = d.""Id"" AND d.""IsDeleted"" = false
-            LEFT JOIN ""Vehicles"" v ON d.""VehicleId"" = v.""Id"" AND v.""IsDeleted"" = false
+            LEFT JOIN ""Assets"" a ON d.""AssetId"" = a.""Id"" AND a.""IsDeleted"" = false
             WHERE t.""TenantId"" = @TenantId
               AND t.""Timestamp"" >= @StartDate
               AND t.""Timestamp"" <= @EndDate

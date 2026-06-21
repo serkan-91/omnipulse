@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using OmniPulse.Modules.IoTModule.Domain.Entities;
+using OmniPulse.Modules.IoTModule.Domain.Enums;
 using OmniPulse.Modules.IoTModule.Infrastructure.Persistence.Configurations;
 using OmniPulse.BuildingBlocks.Interfaces;
 using OmniPulse.BuildingBlocks.Extensions;
@@ -12,7 +13,8 @@ public class IoTDbContext(
     : DbContext(options)
 {
     public DbSet<Telemetry> Telemetries => Set<Telemetry>();
-    public DbSet<Vehicle> Vehicles => Set<Vehicle>();
+    public DbSet<Asset> Assets => Set<Asset>();
+    public DbSet<AssetPermission> AssetPermissions => Set<AssetPermission>();
     public DbSet<DeviceCategory> DeviceCategories => Set<DeviceCategory>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<AlarmRule> AlarmRules => Set<AlarmRule>();
@@ -35,7 +37,8 @@ public class IoTDbContext(
         base.OnModelCreating(modelBuilder);
 
         modelBuilder.ApplyConfiguration(new TelemetryConfiguration());
-        modelBuilder.ApplyConfiguration(new VehicleConfiguration());
+        modelBuilder.ApplyConfiguration(new AssetConfiguration());
+        modelBuilder.ApplyConfiguration(new AssetPermissionConfiguration());
         modelBuilder.ApplyConfiguration(new DeviceCategoryConfiguration());
         modelBuilder.ApplyConfiguration(new DeviceConfiguration());
         modelBuilder.ApplyConfiguration(new AlarmRuleConfiguration());

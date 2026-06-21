@@ -6,7 +6,7 @@ namespace OmniPulse.Modules.IoTModule.Features.Telemetry.GetTelemetryReport;
 
 public record GetTelemetryReportQuery(
     Guid? DeviceId,
-    Guid? VehicleId,
+    Guid? AssetId,
     DateTime StartDate,
     DateTime EndDate,
     string MetricKey = "Temperature",
@@ -28,7 +28,7 @@ public record BreachPointDto(
     Guid Id,
     Guid DeviceId,
     string DeviceName,
-    string? VehiclePlateNumber,
+    string? AssetName,
     double Value,
     double Threshold,
     DateTime Timestamp

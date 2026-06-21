@@ -65,6 +65,11 @@ public static class DbContextExtensions
                         softDelete.DeletedBy = currentUserId;
                     }
                     break;
+                case EntityState.Detached:
+                case EntityState.Unchanged:
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
             }
         }
     }

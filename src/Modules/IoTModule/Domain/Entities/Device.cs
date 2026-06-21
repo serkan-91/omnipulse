@@ -22,9 +22,9 @@ public class Device : BaseEntity, IAuditableEntity, ITenantEntity, ISoftDelete
     // Cihaz aktif mi (veri akışı açık mı)?
     public bool IsActive { get; private set; }
 
-    // Bu sensörün takılı olduğu araç (Zimmet grubu)
-    public Guid? VehicleId { get; private set; }
-    public Vehicle? Vehicle { get; private set; }
+    // Bu sensörün bağlı olduğu varlık (araç, bant, dolap, vb.)
+    public Guid? AssetId { get; private set; }
+    public Asset? Asset { get; private set; }
 
     // Bu sensörün ait olduğu kategori
     public Guid? CategoryId { get; private set; }
@@ -51,7 +51,7 @@ public class Device : BaseEntity, IAuditableEntity, ITenantEntity, ISoftDelete
         Guid tenantId, 
         string name, 
         string serialNumber, 
-        Guid? vehicleId = null, 
+        Guid? assetId = null, 
         Guid? categoryId = null)
     {
         if (tenantId == Guid.Empty)
@@ -69,14 +69,14 @@ public class Device : BaseEntity, IAuditableEntity, ITenantEntity, ISoftDelete
             Name = name.Trim(),
             SerialNumber = serialNumber.ToUpperInvariant().Trim(),
             IsActive = true,
-            VehicleId = vehicleId,
+            AssetId = assetId,
             CategoryId = categoryId
         };
     }
 
-    public void AssignToVehicle(Guid? vehicleId)
+    public void AssignToAsset(Guid? assetId)
     {
-        VehicleId = vehicleId;
+        AssetId = assetId;
     }
 
     public void AssignToCategory(Guid? categoryId)

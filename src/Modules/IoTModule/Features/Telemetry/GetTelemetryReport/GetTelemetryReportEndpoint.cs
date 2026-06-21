@@ -13,7 +13,7 @@ public static class GetTelemetryReportEndpoint
     {
         app.MapGet("api/iot/reports/cold-chain", async (
                 [FromQuery] Guid? deviceId,
-                [FromQuery] Guid? vehicleId,
+                [FromQuery] Guid? assetId,
                 [FromQuery] DateTime? startDate,
                 [FromQuery] DateTime? endDate,
                 [FromQuery] string? metricKey,
@@ -22,7 +22,7 @@ public static class GetTelemetryReportEndpoint
             {
                 var query = new GetTelemetryReportQuery(
                     DeviceId: deviceId,
-                    VehicleId: vehicleId,
+                    AssetId: assetId,
                     StartDate: startDate ?? DateTime.UtcNow.AddDays(-30),
                     EndDate: endDate ?? DateTime.UtcNow,
                     MetricKey: metricKey ?? "Temperature",

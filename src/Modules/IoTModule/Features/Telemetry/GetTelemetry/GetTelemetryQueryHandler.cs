@@ -20,9 +20,9 @@ public class GetTelemetryQueryHandler(
     {
         var query = dbContext.Telemetries
             .Include(t => t.Device)
-            .ThenInclude(d => d.Vehicle)
+            .ThenInclude(d => d.Asset)
             .AsNoTracking()
-            .ApplyDriverFilter(userTenantContext);
+            .ApplyAssetFilter(userTenantContext, dbContext);
 
         // 2. Diğer isteğe bağlı filtreleri uygula
         if (request.DeviceId.HasValue)
@@ -30,9 +30,9 @@ public class GetTelemetryQueryHandler(
             query = query.Where(t => t.DeviceId == request.DeviceId.Value);
         }
 
-        if (request.VehicleId.HasValue)
+        if (request.AssetId.HasValue)
         {
-            query = query.Where(t => t.Device.VehicleId == request.VehicleId.Value);
+            query = query.Where(t => t.Device.AssetId == request.AssetId.Value);
         }
 
         if (request.StartDate.HasValue)
@@ -57,8 +57,8 @@ public class GetTelemetryQueryHandler(
                 t.DeviceId,
                 t.Device.Name,
                 t.Device.SerialNumber,
-                t.Device.VehicleId,
-                t.Device.Vehicle != null ? t.Device.Vehicle.PlateNumber : null,
+                t.Device.AssetId,
+                t.Device.Asset != null ? t.Device.Asset.Name : null,
                 t.Temperature,
                 t.Pressure,
                 t.Timestamp
