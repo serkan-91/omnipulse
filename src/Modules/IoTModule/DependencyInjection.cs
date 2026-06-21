@@ -30,6 +30,7 @@ public static class DependencyInjection
         services.AddScoped<Features.Alarms.IAlarmService, Features.Alarms.AlarmService>();
         services.AddScoped<OmniPulse.BuildingBlocks.Interfaces.IIotAssetService, Infrastructure.Services.IotAssetService>();
         services.AddHostedService<Features.Alarms.TelemetryAlarmBackgroundProcessor>();
+        services.AddHostedService<Infrastructure.Services.OutboxEventProcessor>();
 
         // AWS Kinesis IAmazonKinesis İstemcisi ve Yayıncı Kaydı (LocalStack veya Canlı AWS)
         var kinesisSection = configuration.GetSection("AWS:Kinesis");

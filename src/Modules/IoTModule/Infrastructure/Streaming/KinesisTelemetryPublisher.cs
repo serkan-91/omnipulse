@@ -30,7 +30,13 @@ public class KinesisTelemetryPublisher : IKinesisTelemetryPublisher
         _streamName = configuration.GetValue<string>("AWS:Kinesis:StreamName") ?? "omnipulse-telemetry-stream";
     }
 
-    public async Task PublishAsync(string partitionKey, object telemetryData, CancellationToken cancellationToken = default)
+    public Task PublishAsync(string partitionKey, object telemetryData, CancellationToken cancellationToken = default)
+    {
+        var json = JsonSerializer.Serialize(telemetryData);
+        return PublishRawAsync(partitionKey, json, cancellationToken);
+    }
+
+    public async Task PublishRawAsync(string partitionKey, string rawJsonPayload, CancellationToken cancellationToken = default)
     {
         if (_kinesisClient == null)
         {
@@ -40,8 +46,7 @@ public class KinesisTelemetryPublisher : IKinesisTelemetryPublisher
 
         try
         {
-            var json = JsonSerializer.Serialize(telemetryData);
-            var bytes = Encoding.UTF8.GetBytes(json);
+            var bytes = Encoding.UTF8.GetBytes(rawJsonPayload);
 
             using var memoryStream = new MemoryStream(bytes);
             var putRecordRequest = new PutRecordRequest

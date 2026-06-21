@@ -19,6 +19,7 @@ public class IoTDbContext(
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<AlarmRule> AlarmRules => Set<AlarmRule>();
     public DbSet<AlarmEvent> AlarmEvents => Set<AlarmEvent>();
+    public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
 
     public override int SaveChanges()
     {
@@ -43,6 +44,7 @@ public class IoTDbContext(
         modelBuilder.ApplyConfiguration(new DeviceConfiguration());
         modelBuilder.ApplyConfiguration(new AlarmRuleConfiguration());
         modelBuilder.ApplyConfiguration(new AlarmEventConfiguration());
+        modelBuilder.ApplyConfiguration(new OutboxEventConfiguration());
 
         // Modeldeki tüm entity'ler için dinamik filtreleme ayarları
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())

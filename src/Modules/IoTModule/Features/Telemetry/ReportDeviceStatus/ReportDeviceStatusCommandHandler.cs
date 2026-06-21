@@ -1,17 +1,17 @@
 using System;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using OmniPulse.Modules.IoTModule.Domain.Entities;
 using OmniPulse.Modules.IoTModule.Infrastructure.Persistence;
-using OmniPulse.Modules.IoTModule.Infrastructure.Streaming;
 
 namespace OmniPulse.Modules.IoTModule.Features.Telemetry.ReportDeviceStatus;
 
 public class ReportDeviceStatusCommandHandler(
     IoTDbContext dbContext,
-    IKinesisTelemetryPublisher kinesisPublisher,
     ILogger<ReportDeviceStatusCommandHandler> logger)
     : IRequestHandler<ReportDeviceStatusCommand, ReportDeviceStatusResponse>
 {
@@ -30,19 +30,22 @@ public class ReportDeviceStatusCommandHandler(
             {
                 logger.LogWarning("⚠️ Bilinmeyen cihaz seri numarasıyla bağlantı durumu bildirme denemesi: {Serial}", serialNumber);
 
-                // Yetkisiz erişim/deneme güvenlik olayı Kinesis'e fırlatılıyor 🚨
-                await kinesisPublisher.PublishAsync(
-                    partitionKey: serialNumber,
-                    telemetryData: new
+                // Yetkisiz erişim/deneme güvenlik olayı Outbox'a yazılıyor 🚨
+                var outboxEvent = OutboxEvent.Create(
+                    eventType: "SecurityAudit",
+                    payload: JsonSerializer.Serialize(new
                     {
                         EventType = "SecurityAudit",
                         Action = "UnknownDeviceConnectionAttempt",
                         DeviceSerialNumber = serialNumber,
                         Message = $"Sistemde kayıtlı olmayan bir cihaz bağlantı kurmaya çalıştı: {serialNumber}",
                         Timestamp = DateTime.UtcNow
-                    },
-                    cancellationToken
+                    }),
+                    partitionKey: serialNumber
                 );
+
+                dbContext.OutboxEvents.Add(outboxEvent);
+                await dbContext.SaveChangesAsync(cancellationToken);
 
                 return new ReportDeviceStatusResponse(
                     Message: $"Durum bildirimi reddedildi: Cihaz [{serialNumber}] sistemde kayıtlı değil!",
@@ -56,9 +59,9 @@ public class ReportDeviceStatusCommandHandler(
             {
                 logger.LogWarning("⚠️ Pasif durumdaki cihazdan bağlantı durumu bildirimi reddedildi: {Serial}", serialNumber);
 
-                await kinesisPublisher.PublishAsync(
-                    partitionKey: device.SerialNumber,
-                    telemetryData: new
+                var outboxEvent = OutboxEvent.Create(
+                    eventType: "SecurityAudit",
+                    payload: JsonSerializer.Serialize(new
                     {
                         EventType = "SecurityAudit",
                         Action = "InactiveDeviceConnectionAttempt",
@@ -66,9 +69,12 @@ public class ReportDeviceStatusCommandHandler(
                         TenantId = device.TenantId,
                         Message = $"Pasif/askıya alınmış bir cihaz bağlantı kurmaya çalıştı: {device.Name} ({device.SerialNumber})",
                         Timestamp = DateTime.UtcNow
-                    },
-                    cancellationToken
+                    }),
+                    partitionKey: device.SerialNumber
                 );
+
+                dbContext.OutboxEvents.Add(outboxEvent);
+                await dbContext.SaveChangesAsync(cancellationToken);
 
                 return new ReportDeviceStatusResponse(
                     Message: $"Durum bildirimi reddedildi: Cihaz [{device.Name}] pasif durumda!",
@@ -77,10 +83,10 @@ public class ReportDeviceStatusCommandHandler(
                 );
             }
 
-            // 3. Bağlantı/Durum Değişikliği Olayını Kinesis'e Aktar (Real-Time SIEM Pipeline) 🔌
-            await kinesisPublisher.PublishAsync(
-                partitionKey: device.SerialNumber,
-                telemetryData: new
+            // 3. Bağlantı/Durum Değişikliği Olayını Outbox'a Aktar 🔌
+            var statusOutboxEvent = OutboxEvent.Create(
+                eventType: "DeviceConnection",
+                payload: JsonSerializer.Serialize(new
                 {
                     EventType = "DeviceConnection",
                     DeviceSerialNumber = device.SerialNumber,
@@ -88,15 +94,18 @@ public class ReportDeviceStatusCommandHandler(
                     IsOnline = request.IsOnline,
                     Message = $"Cihaz bağlantı durumu değişti: {device.Name} -> {(request.IsOnline ? "ONLINE" : "OFFLINE")}",
                     Timestamp = request.Timestamp
-                },
-                cancellationToken
+                }),
+                partitionKey: device.SerialNumber
             );
 
-            logger.LogInformation("Cihaz bağlantı durumu Kinesis'e aktarıldı: {Serial} -> {Status}", 
+            dbContext.OutboxEvents.Add(statusOutboxEvent);
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            logger.LogInformation("Cihaz bağlantı durumu Outbox'a aktarıldı: {Serial} -> {Status}", 
                 device.SerialNumber, request.IsOnline ? "ONLINE" : "OFFLINE");
 
             return new ReportDeviceStatusResponse(
-                Message: $"Cihaz durumu başarıyla güncellendi ve Kinesis'e pompalandı: {device.Name} -> {(request.IsOnline ? "ONLINE" : "OFFLINE")}",
+                Message: $"Cihaz durumu başarıyla güncellendi ve Outbox kuyruğuna kaydedildi: {device.Name} -> {(request.IsOnline ? "ONLINE" : "OFFLINE")}",
                 IsSuccess: true,
                 ProcessedAt: DateTime.UtcNow
             );

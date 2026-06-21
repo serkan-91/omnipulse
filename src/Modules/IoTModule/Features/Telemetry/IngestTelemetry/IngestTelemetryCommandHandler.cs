@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MediatR;
@@ -6,18 +7,16 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using OmniPulse.Modules.IoTModule.Domain.Entities;
 using OmniPulse.Modules.IoTModule.Infrastructure.Persistence;
-using OmniPulse.Modules.IoTModule.Infrastructure.Streaming;
 
 namespace OmniPulse.Modules.IoTModule.Features.Telemetry.IngestTelemetry;
 
 /// <summary>
 /// IoT cihazlarından gelen telemetri verisini işleyen, veri tabanına mühürleyen
-/// ve yüksek ölçekli analiz için AWS Kinesis'e pompalayan komut işleyicisi! 🌡️📡
+/// ve transactional outbox tablosuna yazan komut işleyicisi! 🌡️📡
 /// </summary>
 public class IngestTelemetryCommandHandler(
     IoTDbContext dbContext,
     MediatR.IMediator mediator,
-    IKinesisTelemetryPublisher kinesisPublisher,
     ILogger<IngestTelemetryCommandHandler> logger) 
     : IRequestHandler<IngestTelemetryCommand, IngestTelemetryResponse>
 {
@@ -36,19 +35,22 @@ public class IngestTelemetryCommandHandler(
             {
                 logger.LogWarning("Bilinmeyen cihaz seri numarasıyla telemetri denemesi: {Serial}", serialNumber);
                 
-                // Güvenlik audit olayını Kinesis'e aktarıyoruz 🚨
-                await kinesisPublisher.PublishAsync(
-                    partitionKey: serialNumber,
-                    telemetryData: new
+                // Güvenlik audit olayını transactional outbox'a yazıyoruz 🚨
+                var outboxEvent = OutboxEvent.Create(
+                    eventType: "SecurityAudit",
+                    payload: JsonSerializer.Serialize(new
                     {
                         EventType = "SecurityAudit",
                         Action = "UnknownDeviceAttempt",
                         DeviceSerialNumber = serialNumber,
                         Message = $"Sistemde kayıtlı olmayan cihazdan telemetri gönderilmeye çalışıldı: {serialNumber}",
                         Timestamp = DateTime.UtcNow
-                    },
-                    cancellationToken
+                    }),
+                    partitionKey: serialNumber
                 );
+
+                dbContext.OutboxEvents.Add(outboxEvent);
+                await dbContext.SaveChangesAsync(cancellationToken);
 
                 return new IngestTelemetryResponse(
                     Message: $"Telemetri reddedildi: Seri numarası [{serialNumber}] olan cihaz sistemde kayıtlı değil!",
@@ -61,10 +63,10 @@ public class IngestTelemetryCommandHandler(
             {
                 logger.LogWarning("Pasif durumdaki cihazdan telemetri reddedildi: {Serial}", serialNumber);
 
-                // Güvenlik audit olayını Kinesis'e aktarıyoruz 🚨
-                await kinesisPublisher.PublishAsync(
-                    partitionKey: device.SerialNumber,
-                    telemetryData: new
+                // Güvenlik audit olayını transactional outbox'a yazıyoruz 🚨
+                var outboxEvent = OutboxEvent.Create(
+                    eventType: "SecurityAudit",
+                    payload: JsonSerializer.Serialize(new
                     {
                         EventType = "SecurityAudit",
                         Action = "InactiveDeviceAttempt",
@@ -72,9 +74,12 @@ public class IngestTelemetryCommandHandler(
                         TenantId = device.TenantId,
                         Message = $"Pasif/engellenmiş cihazdan veri akışı denendi: {device.Name} ({device.SerialNumber})",
                         Timestamp = DateTime.UtcNow
-                    },
-                    cancellationToken
+                    }),
+                    partitionKey: device.SerialNumber
                 );
+
+                dbContext.OutboxEvents.Add(outboxEvent);
+                await dbContext.SaveChangesAsync(cancellationToken);
 
                 return new IngestTelemetryResponse(
                     Message: $"Telemetri reddedildi: Cihaz [{device.Name}] pasif durumda!",
@@ -93,14 +98,11 @@ public class IngestTelemetryCommandHandler(
             );
 
             dbContext.Telemetries.Add(telemetry);
-            await dbContext.SaveChangesAsync(cancellationToken);
 
-            // 3. AWS Kinesis'e Yüksek Performanslı Asenkron Yayın (Real-Time Stream Pipeline)
-            // PartitionKey olarak cihazın seri numarasını veriyoruz; böylece aynı cihazın verileri 
-            // Kinesis shard'larında her zaman ardışık ve sıralı işlenir! 🚀
-            await kinesisPublisher.PublishAsync(
-                partitionKey: device.SerialNumber,
-                telemetryData: new
+            // 3. AWS Kinesis'e iletilecek olay için OutboxEvent oluşturup aynı transaction'a ekliyoruz 📦
+            var telemetryOutboxEvent = OutboxEvent.Create(
+                eventType: "TelemetryIngested",
+                payload: JsonSerializer.Serialize(new
                 {
                     TelemetryId = telemetry.Id,
                     DeviceSerialNumber = device.SerialNumber,
@@ -108,9 +110,14 @@ public class IngestTelemetryCommandHandler(
                     telemetry.Temperature,
                     telemetry.Pressure,
                     telemetry.Timestamp
-                },
-                cancellationToken
+                }),
+                partitionKey: device.SerialNumber
             );
+
+            dbContext.OutboxEvents.Add(telemetryOutboxEvent);
+
+            // SaveChangesAsync hem telemetriyi hem outboxEvent'i tek bir transaction'da atomik yazar! 🛡️
+            await dbContext.SaveChangesAsync(cancellationToken);
 
             // 4. Alarmların tetiklenmesi için olayı (event) yayınla 🔔
             await mediator.Publish(new TelemetryIngestedEvent(
@@ -123,7 +130,7 @@ public class IngestTelemetryCommandHandler(
             ), cancellationToken);
 
             return new IngestTelemetryResponse(
-                Message: $"Telemetri başarıyla alındı ve Kinesis akışına pompalandı! ⚡ Cihaz: [{device.Name}] -> Sıcaklık: {request.Temperature}°C, Basınç: {request.Pressure} hPa.",
+                Message: $"Telemetri başarıyla alındı ve Outbox kuyruğuna kaydedildi! ⚡ Cihaz: [{device.Name}] -> Sıcaklık: {request.Temperature}°C, Basınç: {request.Pressure} hPa.",
                 IsSuccess: true,
                 ProcessedAt: DateTime.UtcNow
             );

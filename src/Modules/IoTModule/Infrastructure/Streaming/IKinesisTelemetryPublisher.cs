@@ -9,4 +9,5 @@ namespace OmniPulse.Modules.IoTModule.Infrastructure.Streaming;
 public interface IKinesisTelemetryPublisher
 {
     Task PublishAsync(string partitionKey, object telemetryData, CancellationToken cancellationToken = default);
+    Task PublishRawAsync(string partitionKey, string rawJsonPayload, CancellationToken cancellationToken = default);
 }
