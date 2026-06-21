@@ -62,7 +62,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                     new AttributeDefinition("PK", ScalarAttributeType.S),
                     new AttributeDefinition("SK", ScalarAttributeType.S),
                     new AttributeDefinition("TenantId", ScalarAttributeType.S),
-                    new AttributeDefinition("Status", ScalarAttributeType.S)
+                    new AttributeDefinition("GSI1_SK", ScalarAttributeType.S)
                 },
                 KeySchema = new List<KeySchemaElement>
                 {
@@ -78,7 +78,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                         KeySchema = new List<KeySchemaElement>
                         {
                             new KeySchemaElement("TenantId", KeyType.HASH),
-                            new KeySchemaElement("Status", KeyType.RANGE)
+                            new KeySchemaElement("GSI1_SK", KeyType.RANGE)
                         },
                         Projection = new Projection { ProjectionType = ProjectionType.ALL }
                     }
@@ -136,6 +136,7 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                 { "PK", new AttributeValue { S = task.PK } },
                 { "SK", new AttributeValue { S = task.SK } },
                 { "TenantId", new AttributeValue { S = task.TenantId.ToString() } },
+                { "GSI1_SK", new AttributeValue { S = $"{task.Status}#WorkflowTask" } }, // Composite Key (Status#EntityType) 
                 { "TaskId", new AttributeValue { S = task.TaskId.ToString() } },
                 { "WorkflowDefinitionId", new AttributeValue { S = task.WorkflowDefinitionId.ToString() } },
                 { "WorkflowName", new AttributeValue { S = task.WorkflowName } },
@@ -378,12 +379,11 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                     {
                         TableName = TableName,
                         IndexName = "TenantStatusIndex",
-                        KeyConditionExpression = "TenantId = :tenantId AND #s = :status",
-                        ExpressionAttributeNames = new Dictionary<string, string> { { "#s", "Status" } },
+                        KeyConditionExpression = "TenantId = :tenantId AND GSI1_SK = :gsi1Sk",
                         ExpressionAttributeValues = new Dictionary<string, AttributeValue>
                         {
                             { ":tenantId", new AttributeValue { S = tenantId.ToString() } },
-                            { ":status", new AttributeValue { S = status } }
+                            { ":gsi1Sk", new AttributeValue { S = $"{status}#WorkflowTask" } }
                         }
                     };
                 }
@@ -497,12 +497,13 @@ public class DynamoDbTaskStore : IWorkflowTaskStore
                         { "PK", new AttributeValue { S = task.PK } },
                         { "SK", new AttributeValue { S = task.SK } }
                     },
-                    UpdateExpression = "SET #s = :newStatus, UpdatedAtUtc = :updatedAt, Version = :newVersion",
+                    UpdateExpression = "SET #s = :newStatus, GSI1_SK = :gsi1Sk, UpdatedAtUtc = :updatedAt, Version = :newVersion",
                     ConditionExpression = "Version = :expectedVersion",
                     ExpressionAttributeNames = new Dictionary<string, string> { { "#s", "Status" } },
                     ExpressionAttributeValues = new Dictionary<string, AttributeValue>
                     {
                         { ":newStatus",       new AttributeValue { S = newStatus } },
+                        { ":gsi1Sk",          new AttributeValue { S = $"{newStatus}#WorkflowTask" } },
                         { ":updatedAt",       new AttributeValue { S = task.UpdatedAtUtc.ToString("o") } },
                         { ":newVersion",      new AttributeValue { N = (task.Version + 1).ToString() } },
                         { ":expectedVersion", new AttributeValue { N = task.Version.ToString() } }
