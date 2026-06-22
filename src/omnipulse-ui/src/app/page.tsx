@@ -77,6 +77,13 @@ const SEED_DEVICES = [
   { serialNumber: "SN-BTB1-OIL", name: "Bant B1 Yağ Sensörü", tenantId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", unit: "%" }
 ];
 
+const MOCK_DEVICES: Record<string, DeviceState> = {
+  "SN-AUPANDA-TEMP": { id: "SN-AUPANDA-TEMP", name: "AUPanda01 (Tır)", serialNumber: "SN-AUPANDA-TEMP", tenantId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] },
+  "SN-BTA1-WATER": { id: "SN-BTA1-WATER", name: "Bant A1 (Su Deposu)", serialNumber: "SN-BTA1-WATER", tenantId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] },
+  "SN-BTA1-VIB": { id: "SN-BTA1-VIB", name: "Bant A1 (Titreşim)", serialNumber: "SN-BTA1-VIB", tenantId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] },
+  "SN-BTB1-OIL": { id: "SN-BTB1-OIL", name: "Bant B1 (Yağ)", serialNumber: "SN-BTB1-OIL", tenantId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] }
+};
+
 export default function TelemetryDashboard() {
   const showSimulators = process.env.NODE_ENV !== "production";
 
@@ -94,12 +101,7 @@ export default function TelemetryDashboard() {
   const [isSending, setIsSending] = useState(false);
 
   // Dashboard Telemetry states
-  const [devices, setDevices] = useState<Record<string, DeviceState>>({
-    "SN-AUPANDA-TEMP": { id: "SN-AUPANDA-TEMP", name: "AUPanda01 (Tır)", serialNumber: "SN-AUPANDA-TEMP", tenantId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] },
-    "SN-BTA1-WATER": { id: "SN-BTA1-WATER", name: "Bant A1 (Su Deposu)", serialNumber: "SN-BTA1-WATER", tenantId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] },
-    "SN-BTA1-VIB": { id: "SN-BTA1-VIB", name: "Bant A1 (Titreşim)", serialNumber: "SN-BTA1-VIB", tenantId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] },
-    "SN-BTB1-OIL": { id: "SN-BTB1-OIL", name: "Bant B1 (Yağ)", serialNumber: "SN-BTB1-OIL", tenantId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", lastTemp: 25.0, lastPress: 1000.0, isOnline: true, history: [] }
-  });
+  const [devices, setDevices] = useState<Record<string, DeviceState>>({});
 
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
@@ -123,6 +125,12 @@ export default function TelemetryDashboard() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
 
+  // IoT Demo & Devices States
+  const [isDemoSeeding, setIsDemoSeeding] = useState(false);
+  const [isDemoCleaning, setIsDemoCleaning] = useState(false);
+  const [isUserDevicesLoaded, setIsUserDevicesLoaded] = useState(false);
+  const [userDevicesList, setUserDevicesList] = useState<{ serialNumber: string; name: string; unit: string }[]>([]);
+
   // Auto-scroll terminal log
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -143,10 +151,15 @@ export default function TelemetryDashboard() {
               tenantIdentifier: data.tenantIdentifier,
               roles: normalizedRoles
             });
+          } else {
+            setDevices(MOCK_DEVICES);
           }
+        } else {
+          setDevices(MOCK_DEVICES);
         }
       } catch (err) {
         console.error("BFF auth check failed:", err);
+        setDevices(MOCK_DEVICES);
       } finally {
         setAuthChecked(true);
       }
@@ -173,6 +186,71 @@ export default function TelemetryDashboard() {
     };
     fetchTenantStatus();
   }, [user]);
+
+  const fetchUserDevices = async () => {
+    if (!user) {
+      setUserDevicesList([]);
+      setIsUserDevicesLoaded(false);
+      return;
+    }
+    try {
+      const res = await fetch("/api/bff/proxy/api/iot/devices");
+      if (res.ok) {
+        const data = await res.json();
+        const deviceList = data.map((d: any) => {
+          let unit = "°C";
+          if (d.name.toLowerCase().includes("vibr") || d.serialNumber.toLowerCase().includes("vib")) unit = "Hz";
+          else if (d.name.toLowerCase().includes("press") || d.serialNumber.toLowerCase().includes("pres")) unit = "kPa";
+          return {
+            serialNumber: d.serialNumber,
+            name: d.name + (d.assetName ? ` (${d.assetName})` : ""),
+            unit: unit
+          };
+        });
+        setUserDevicesList(deviceList);
+        
+        setDevices(prev => {
+          const newDevices: Record<string, DeviceState> = {};
+          data.forEach((d: any) => {
+            const existing = prev[d.serialNumber] || {
+              lastTemp: 25.0,
+              lastPress: 1000.0,
+              isOnline: d.isActive,
+              history: []
+            };
+            newDevices[d.serialNumber] = {
+              id: d.id,
+              name: d.name + (d.assetName ? ` (${d.assetName})` : ""),
+              serialNumber: d.serialNumber,
+              tenantId: "",
+              lastTemp: existing.lastTemp,
+              lastPress: existing.lastPress,
+              isOnline: d.isActive,
+              history: existing.history
+            };
+          });
+          return newDevices;
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch tenant devices:", err);
+    } finally {
+      setIsUserDevicesLoaded(true);
+    }
+  };
+
+  // Fetch real tenant devices on user login
+  useEffect(() => {
+    fetchUserDevices();
+  }, [user]);
+
+  // Synchronize selectedDevice when device list updates
+  useEffect(() => {
+    const list = user ? userDevicesList : SEED_DEVICES;
+    if (list.length > 0) {
+      setSelectedDevice(list[0].serialNumber);
+    }
+  }, [user, userDevicesList]);
 
   // Login handler submitting to Next.js BFF
   const handleLogin = async (e: React.FormEvent) => {
@@ -530,6 +608,58 @@ export default function TelemetryDashboard() {
     }
   };
 
+  const handleSeedIoTDemo = async () => {
+    setIsDemoSeeding(true);
+    setSeedLogs("Örnek IoT sensörleri, varlık yapılandırmaları ve geçmiş telemetri verileri oluşturuluyor... ⏳");
+    try {
+      const response = await fetch("/api/bff/proxy/api/iot/devices/seed-demo", {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setSeedLogs(result.message || JSON.stringify(result, null, 2));
+      await fetchUserDevices();
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setSeedLogs(`Demo Kurulum Hatası: ${errMsg}`);
+    } finally {
+      setIsDemoSeeding(false);
+    }
+  };
+
+  const handleCleanupIoTDemo = async () => {
+    if (!confirm("Tüm demo sensörleri, varlıkları ve telemetri geçmişini kalıcı olarak silmek istediğinizden emin misiniz?")) {
+      return;
+    }
+    setIsDemoCleaning(true);
+    setSeedLogs("Demo verileri temizleniyor ve envanter sıfırlanıyor... 🧹");
+    try {
+      const response = await fetch("/api/bff/proxy/api/iot/devices/cleanup-demo", {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setSeedLogs(result.message || JSON.stringify(result, null, 2));
+      setDevices({});
+      setUserDevicesList([]);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setSeedLogs(`Temizlik Hatası: ${errMsg}`);
+    } finally {
+      setIsDemoCleaning(false);
+    }
+  };
+
   // Direct mock simulation loop (fallback if backend localstack/kinesis is disconnected)
   const simulateDirectTelemetry = (devId: string, tempVal: number, pressVal: number) => {
     const mockEvents = [
@@ -586,19 +716,24 @@ export default function TelemetryDashboard() {
     if (!isAutoSim) return;
 
     const interval = setInterval(() => {
-      SEED_DEVICES.forEach((dev) => {
+      const activeList = user ? userDevicesList : SEED_DEVICES;
+      activeList.forEach((dev) => {
         // Skip sending if device is offline (to show realistic connection flow)
         if (devices[dev.serialNumber]?.isOnline === false) return;
 
         let randTemp = 20 + Math.random() * 60; // 20 - 80
         const randPress = 970 + Math.random() * 70; // 970 - 1040
 
-        if (dev.serialNumber === "SN-BTA1-WATER") {
+        if (dev.serialNumber.toLowerCase().includes("water")) {
           randTemp = 10 + Math.random() * 25;
-        } else if (dev.serialNumber === "SN-BTA1-VIB") {
+        } else if (dev.serialNumber.toLowerCase().includes("vib")) {
           randTemp = 50 + Math.random() * 110;
-        } else if (dev.serialNumber === "SN-BTB1-OIL") {
+        } else if (dev.serialNumber.toLowerCase().includes("oil")) {
           randTemp = 15 + Math.random() * 50;
+        } else if (dev.serialNumber.toLowerCase().includes("temp")) {
+          randTemp = 4.0 + Math.random() * 1.5;
+        } else if (dev.serialNumber.toLowerCase().includes("pres")) {
+          randTemp = 24.5 + Math.random() * 1.0;
         }
 
         handleSendTelemetryRef.current(dev.serialNumber, randTemp, randPress);
@@ -606,7 +741,7 @@ export default function TelemetryDashboard() {
     }, 2500);
 
     return () => clearInterval(interval);
-  }, [isAutoSim, devices]);
+  }, [isAutoSim, devices, user, userDevicesList]);
 
   // Generate SVG path for histories
   const generateSvgPath = (history: { temp: number; press: number }[], type: "temp" | "press", width: number, height: number) => {
@@ -775,14 +910,36 @@ export default function TelemetryDashboard() {
           </div>
 
           {showSimulators && (
-            <button
-              onClick={handleSeedDemo}
-              disabled={isSeeding}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95"
-            >
-              <Database className="w-3.5 h-3.5" />
-              {isSeeding ? "Kuruluyor..." : "Demo Kurulumu (Seed)"}
-            </button>
+            user ? (
+              userDevicesList.length > 0 ? (
+                <button
+                  onClick={handleCleanupIoTDemo}
+                  disabled={isDemoCleaning}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  {isDemoCleaning ? "Temizleniyor..." : "Demo Verileri Temizle (Reset)"}
+                </button>
+              ) : (
+                <button
+                  onClick={handleSeedIoTDemo}
+                  disabled={isDemoSeeding}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  {isDemoSeeding ? "Yükleniyor..." : "Demo Sensörleri Yükle"}
+                </button>
+              )
+            ) : (
+              <button
+                onClick={handleSeedDemo}
+                disabled={isSeeding}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+              >
+                <Database className="w-3.5 h-3.5" />
+                {isSeeding ? "Kuruluyor..." : "Demo Kurulumu (Seed)"}
+              </button>
+            )
           )}
 
           <button
@@ -861,7 +1018,7 @@ export default function TelemetryDashboard() {
           <div className="mt-3 flex justify-end">
             <button
               onClick={() => setAlerts([])}
-              className="text-[10px] text-rose-400 hover:text-rose-200 font-bold uppercase underline"
+              className="text-[10px] text-rose-400 hover:text-rose-200 font-bold uppercase underline cursor-pointer"
             >
               Uyarılardan Çık / Temizle
             </button>
@@ -875,7 +1032,42 @@ export default function TelemetryDashboard() {
         {/* Left Column: Visual Dashboard Cards */}
         <div className="xl:col-span-2 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {SEED_DEVICES.map((dev) => {
+            {user && !isUserDevicesLoaded ? (
+              <div className="col-span-full py-16 flex flex-col items-center justify-center space-y-4">
+                <RefreshCw className="w-8 h-8 text-teal-400 animate-spin" />
+                <span className="text-xs text-slate-500 font-mono">Sensör listesi güncelleniyor... 🔌</span>
+              </div>
+            ) : user && userDevicesList.length === 0 ? (
+              <div className="col-span-full p-8 rounded-3xl bg-slate-900/40 border border-slate-800/80 backdrop-blur-xl flex flex-col items-center justify-center text-center space-y-6">
+                <div className="p-4 rounded-2xl bg-gradient-to-tr from-teal-500 to-indigo-500 text-slate-950 shadow-lg animate-pulse">
+                  <Cpu className="w-8 h-8" />
+                </div>
+                <div className="max-w-md space-y-2">
+                  <h3 className="text-lg font-bold text-slate-100">Sisteminizde Sensör Bulunmuyor 🔌</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    OmniPulse platformunu kendi kiracınız (şirketiniz) altında test etmek için örnek IoT sensörleri, hiyerarşik varlıklar (Assets) ve canlı geçmiş telemetri verilerini içeren demo veri setini anında kurabilirsiniz.
+                  </p>
+                </div>
+                
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <button
+                    onClick={handleSeedIoTDemo}
+                    disabled={isDemoSeeding}
+                    className="flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg hover:shadow-teal-500/10 active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Database className="w-4 h-4" />
+                    {isDemoSeeding ? "Kuruluyor..." : "Demo Sensörleri Yükle (Seed)"}
+                  </button>
+                  <button
+                    onClick={() => alert("Gerçek cihaz eklemek için 'api/iot/devices' endpoint'ini POST isteği ile veya backend envanter sisteminden 'CreateDevice' komutunu kullanarak gerçekleştirebilirsiniz.")}
+                    className="flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl border border-slate-800 bg-slate-950 hover:bg-slate-900 text-slate-300 font-bold text-xs tracking-wide active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Settings className="w-4 h-4 text-slate-400" />
+                    Gerçek Cihaz Bağla
+                  </button>
+                </div>
+              </div>
+            ) : (user ? userDevicesList : SEED_DEVICES).map((dev) => {
               const devData = devices[dev.serialNumber] || { lastTemp: 25, lastPress: 1000, isOnline: true, history: [] };
               const history = devData.history || [];
 
@@ -897,11 +1089,11 @@ export default function TelemetryDashboard() {
                       <h3 className="text-base font-bold text-slate-200 group-hover:text-teal-400 transition-colors mt-0.5">{dev.name}</h3>
                     </div>
                     <div className="p-2 rounded-lg bg-slate-950 border border-slate-800/50">
-                      {dev.serialNumber === "SN-BTA1-WATER" ? (
+                      {dev.serialNumber.toLowerCase().includes("water") ? (
                         <Droplet className="w-5 h-5 text-sky-400" />
-                      ) : dev.serialNumber === "SN-AUPANDA-TEMP" ? (
+                      ) : dev.serialNumber.toLowerCase().includes("temp") ? (
                         <Flame className="w-5 h-5 text-amber-500" />
-                      ) : dev.serialNumber === "SN-BTA1-VIB" ? (
+                      ) : dev.serialNumber.toLowerCase().includes("vib") ? (
                         <Activity className="w-5 h-5 text-emerald-400" />
                       ) : (
                         <Settings className="w-5 h-5 text-purple-400" />
