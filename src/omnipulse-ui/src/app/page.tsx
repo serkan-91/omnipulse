@@ -60,8 +60,10 @@ const SEED_DEVICES = [
 ];
 
 export default function TelemetryDashboard() {
+  const showSimulators = process.env.NODE_ENV !== "production";
+
   // Connection and API states
-  const [hubStatus, setHubStatus] = useState<"Disconnected" | "Connecting" | "Connected" | "Error">("Disconnected");
+  const [hubStatus, setHubStatus] = useState<"Disconnected" | "Connecting" | "Connected" | "Reconnecting" | "Error">("Disconnected");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [seedLogs, setSeedLogs] = useState<string | null>(null);
   const [isSeeding, setIsSeeding] = useState(false);
@@ -86,13 +88,103 @@ export default function TelemetryDashboard() {
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const connectionRef = useRef<signalR.HubConnection | null>(null);
 
+  // BFF Authentication States 🔒
+  const [user, setUser] = useState<{ email: string; tenantIdentifier: string; roles: string[] } | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginTenant, setLoginTenant] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
   // Auto-scroll terminal log
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs, alerts]);
 
-  // Connect to SignalR
+  // Check active BFF session on mount
   useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch("/api/bff/user");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.isAuthenticated) {
+            setUser({
+              email: data.email,
+              tenantIdentifier: data.tenantIdentifier,
+              roles: data.roles
+            });
+          }
+        }
+      } catch (err) {
+        console.error("BFF auth check failed:", err);
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  // Login handler submitting to Next.js BFF
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoggingIn(true);
+    setLoginError(null);
+    try {
+      const res = await fetch("/api/bff/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+          tenantIdentifier: loginTenant || undefined
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.isSuccess) {
+        throw new Error(data.message || "E-posta veya şifre hatalı.");
+      }
+
+      // Load user profile
+      const userRes = await fetch("/api/bff/user");
+      if (userRes.ok) {
+        const userData = await userRes.json();
+        setUser({
+          email: userData.email,
+          tenantIdentifier: userData.tenantIdentifier,
+          roles: userData.roles
+        });
+      }
+    } catch (err: any) {
+      setLoginError(err.message || "Giriş hatası oluştu.");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  // Logout handler clearing BFF cookies
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/bff/logout", { method: "POST" });
+    } catch (err) {
+      console.error("Logout failed:", err);
+    } finally {
+      setUser(null);
+      if (connectionRef.current) {
+        await connectionRef.current.stop();
+      }
+    }
+  };
+
+  // Connect to SignalR with temporary WS access token from BFF
+  useEffect(() => {
+    if (!authChecked || !user) {
+      setHubStatus("Disconnected");
+      return;
+    }
+
     const backendUrl = "http://localhost:5294";
     const hubUrl = `${backendUrl}/hubs/telemetry`;
 
@@ -101,10 +193,27 @@ export default function TelemetryDashboard() {
 
     const newConnection = new signalR.HubConnectionBuilder()
       .withUrl(hubUrl, {
-        skipNegotiation: true,
-        transport: signalR.HttpTransportType.WebSockets
+        accessTokenFactory: async () => {
+          try {
+            const res = await fetch("/api/bff/ws-token");
+            if (res.ok) {
+              const data = await res.json();
+              return data.token || "";
+            }
+          } catch (e) {
+            console.error("WS Token fetch failed:", e);
+          }
+          return "";
+        }
       })
-      .withAutomaticReconnect()
+      .withAutomaticReconnect({
+        nextRetryDelayInMilliseconds: (retryContext) => {
+          // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
+          const delay = Math.min(1000 * Math.pow(2, retryContext.previousRetryCount), 30000);
+          console.log(`[SignalR Reconnect] Attempt #${retryContext.previousRetryCount + 1}. Delaying for ${delay}ms.`);
+          return delay;
+        }
+      })
       .build();
 
     // 1. Telemetry Data Listener
@@ -199,6 +308,26 @@ export default function TelemetryDashboard() {
       });
     });
 
+    // 4. Connection State Events for Auto-Reconnect
+    newConnection.onreconnecting((error) => {
+      console.warn("SignalR connection lost. Reconnecting...", error);
+      setHubStatus("Reconnecting");
+    });
+
+    newConnection.onreconnected((connectionId) => {
+      console.log("SignalR reconnected successfully!", connectionId);
+      setHubStatus("Connected");
+      setErrorMessage(null);
+    });
+
+    newConnection.onclose((error) => {
+      console.error("SignalR connection closed.", error);
+      setHubStatus("Disconnected");
+      if (error) {
+        setErrorMessage("Bağlantı kapandı. Lütfen sayfayı yenileyin.");
+      }
+    });
+
     newConnection
       .start()
       .then(() => {
@@ -217,13 +346,13 @@ export default function TelemetryDashboard() {
     return () => {
       newConnection.stop();
     };
-  }, []);
+  }, [authChecked, user]);
 
   // Send Telemetry HTTP Post
   const handleSendTelemetry = async (devId: string, tempVal: number, pressVal: number) => {
     setIsSending(true);
     try {
-      const response = await fetch("http://localhost:5294/api/iot/telemetry", {
+      const response = await fetch("/api/bff/proxy/api/iot/telemetry", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -252,7 +381,7 @@ export default function TelemetryDashboard() {
   // Send Connection Status Change POST
   const handleSendConnectionStatus = async (devId: string, isOnline: boolean) => {
     try {
-      const response = await fetch("http://localhost:5294/api/iot/devices/status", {
+      const response = await fetch("/api/bff/proxy/api/iot/devices/status", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -292,7 +421,7 @@ export default function TelemetryDashboard() {
     setIsSeeding(true);
     setSeedLogs("Demo veritabanı kuruluyor ve tablolar tohumlanıyor (seeding)... ⏳");
     try {
-      const response = await fetch("http://localhost:5294/api/workflows/demo", {
+      const response = await fetch("/api/bff/proxy/api/workflows/demo", {
         method: "POST"
       });
 
@@ -400,6 +529,101 @@ export default function TelemetryDashboard() {
     return `M ${points.join(" L ")}`;
   };
 
+  // Loading state during auth check
+  if (!authChecked) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-950">
+        <div className="flex flex-col items-center space-y-4">
+          <RefreshCw className="w-8 h-8 text-teal-400 animate-spin" />
+          <span className="text-xs text-slate-400 font-mono">Güvenli BFF oturumu doğrulanıyor... 🛡️</span>
+        </div>
+      </main>
+    );
+  }
+
+  // Login form overlay if not logged in
+  if (!user) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-950 text-slate-100 font-sans relative overflow-hidden">
+        {/* Decorative Glows */}
+        <div className="absolute top-1/4 left-1/4 w-[400px] h-[400px] bg-teal-500/10 blur-[150px] pointer-events-none rounded-full" />
+        <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-indigo-500/10 blur-[150px] pointer-events-none rounded-full" />
+
+        {/* Glassmorphic Card */}
+        <div className="z-10 w-full max-w-md p-8 rounded-3xl bg-slate-900/40 border border-slate-800/80 backdrop-blur-xl shadow-2xl space-y-6">
+          <div className="flex flex-col items-center space-y-2">
+            <div className="p-3 rounded-2xl bg-gradient-to-tr from-teal-500 to-indigo-500 text-slate-950 shadow-lg">
+              <Zap className="w-8 h-8 animate-pulse" />
+            </div>
+            <h1 className="text-2xl font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">
+              OMNIPULSE BFF PORTAL
+            </h1>
+            <p className="text-xs text-slate-400 font-mono text-center">
+              Next.js 16 BFF (Backend For Frontend) &bull; Secure Session
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">E-Posta</label>
+              <input
+                type="email"
+                required
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="ornek@omnipulse.com"
+                className="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-slate-800/60 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-sm outline-none transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Şifre</label>
+              <input
+                type="password"
+                required
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-slate-800/60 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-sm outline-none transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Şirket Kodu (Tenant - Opsiyonel)</label>
+              <input
+                type="text"
+                value={loginTenant}
+                onChange={(e) => setLoginTenant(e.target.value)}
+                placeholder="Örn: pandaberry"
+                className="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-slate-800/60 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-sm outline-none transition-all"
+              />
+            </div>
+
+            {loginError && (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-mono">
+                {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isLoggingIn}
+              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-teal-500 to-indigo-500 text-slate-950 hover:from-teal-400 hover:to-indigo-400 font-bold text-sm tracking-wide transition-all duration-200 hover:shadow-lg active:scale-98 disabled:opacity-50"
+            >
+              {isLoggingIn ? "Bağlanıyor..." : "Giriş Yap"}
+            </button>
+          </form>
+
+          <div className="pt-4 border-t border-slate-900 text-center">
+            <span className="text-[10px] text-slate-500 font-mono">
+              BFF Mode: Token'lar sunucu tarafında HttpOnly çerezlerde kilitlidir.
+            </span>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-screen flex-col bg-slate-950 text-slate-100 font-sans selection:bg-teal-500 selection:text-slate-950 relative overflow-hidden">
       {/* Decorative Glows */}
@@ -420,8 +644,15 @@ export default function TelemetryDashboard() {
           </div>
         </div>
 
-        {/* SignalR Connection Status Indicator */}
-        <div className="flex items-center gap-3">
+        {/* User Info & Connection Indicators */}
+        <div className="flex items-center gap-4">
+          <div className="hidden md:flex flex-col items-end text-xs font-mono">
+            <span className="text-slate-200 font-bold">{user.email}</span>
+            <span className="text-slate-500 text-[10px]">
+              {user.tenantIdentifier ? `@${user.tenantIdentifier}` : ""} &bull; {user.roles.join(", ")}
+            </span>
+          </div>
+
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-mono transition-all ${
             hubStatus === "Connected"
               ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
@@ -439,16 +670,74 @@ export default function TelemetryDashboard() {
             WS Gateway: {hubStatus}
           </div>
 
+          {showSimulators && (
+            <button
+              onClick={handleSeedDemo}
+              disabled={isSeeding}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95"
+            >
+              <Database className="w-3.5 h-3.5" />
+              {isSeeding ? "Kuruluyor..." : "Demo Kurulumu (Seed)"}
+            </button>
+          )}
+
           <button
-            onClick={handleSeedDemo}
-            disabled={isSeeding}
-            className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95"
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800/80 text-slate-300 text-xs font-bold transition-all active:scale-95 cursor-pointer"
           >
-            <Database className="w-3.5 h-3.5" />
-            {isSeeding ? "Kuruluyor..." : "Demo Kurulumu (Seed)"}
+            Çıkış Yap
           </button>
         </div>
       </header>
+
+      {/* SignalR Connection Status Banners */}
+      {hubStatus === "Reconnecting" && (
+        <div className="z-20 bg-amber-500/15 border-b border-amber-500/30 text-amber-300 px-6 py-3 flex items-center gap-3 animate-pulse">
+          <RefreshCw className="w-4.5 h-4.5 text-amber-400 animate-spin" />
+          <div className="flex-1">
+            <span className="font-bold text-xs sm:text-sm">Bağlantı Kesildi, Yeniden Bağlanılıyor...</span>
+            <p className="text-[10px] sm:text-xs text-amber-400/80">Arka planda WebSocket bağlantısı otomatik olarak tazeleniyor. Lütfen bekleyin.</p>
+          </div>
+        </div>
+      )}
+
+      {hubStatus === "Disconnected" && (
+        <div className="z-20 bg-rose-500/15 border-b border-rose-500/30 text-rose-300 px-6 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <WifiOff className="w-4.5 h-4.5 text-rose-400" />
+            <div>
+              <span className="font-bold text-xs sm:text-sm">Bağlantı Çevrimdışı (Offline)</span>
+              <p className="text-[10px] sm:text-xs text-rose-400/80">API sunucusuna bağlanılamadı. Canlı veri akışı durduruldu.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-1.5 px-3 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all active:scale-95 whitespace-nowrap"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Yeniden Bağlan
+          </button>
+        </div>
+      )}
+
+      {hubStatus === "Error" && (
+        <div className="z-20 bg-rose-500/15 border-b border-rose-500/30 text-rose-300 px-6 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-4.5 h-4.5 text-rose-400" />
+            <div>
+              <span className="font-bold text-xs sm:text-sm">Sunucu Bağlantı Hatası</span>
+              <p className="text-[10px] sm:text-xs text-rose-400/80">{errorMessage || "API sunucusu yanıt vermiyor."}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-1.5 px-3 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all active:scale-95 whitespace-nowrap"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Sayfayı Yenile
+          </button>
+        </div>
+      )}
 
       {/* Flashing SIEM Security Alerts Panel */}
       {alerts.length > 0 && (
@@ -592,139 +881,141 @@ export default function TelemetryDashboard() {
           )}
 
           {/* Interactive Pipeline & SIEM Simulator Panel */}
-          <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-900/50 via-slate-900/30 to-indigo-950/20 border border-slate-800/80 backdrop-blur-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800/60 pb-4 mb-6 gap-3">
-              <div className="flex items-center gap-2">
-                <Cpu className="w-5 h-5 text-teal-400" />
-                <h3 className="text-base font-bold text-slate-200">Kinesis & SIEM Güvenlik Simülatörü</h3>
-              </div>
-
-              {/* Loop simulation control */}
-              <button
-                onClick={() => setIsAutoSim(!isAutoSim)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 self-end sm:self-auto ${
-                  isAutoSim
-                    ? "bg-amber-600 hover:bg-amber-500 text-white animate-pulse"
-                    : "bg-teal-500 hover:bg-teal-400 text-slate-950"
-                }`}
-              >
-                {isAutoSim ? (
-                  <>
-                    <Pause className="w-3.5 h-3.5" />
-                    Oto-Simülatör Durdur
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-3.5 h-3.5" />
-                    Oto-Simülatör Başlat (2s)
-                  </>
-                )}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* Simulator Left Column: Connection Status & Malicious Actions */}
-              <div className="space-y-5">
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Simüle Edilecek Sensör</label>
-                  <select
-                    value={selectedDevice}
-                    onChange={(e) => setSelectedDevice(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none"
-                  >
-                    {SEED_DEVICES.map((d) => (
-                      <option key={d.serialNumber} value={d.serialNumber}>
-                        [{d.serialNumber}] {d.name}
-                      </option>
-                    ))}
-                    <option value="SN-MALICIOUS-999">🚨 [GÜVENLİK İHLALİ] Kayıt Dışı Cihaz SN-MALICIOUS-999</option>
-                  </select>
+          {showSimulators && (
+            <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-900/50 via-slate-900/30 to-indigo-950/20 border border-slate-800/80 backdrop-blur-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800/60 pb-4 mb-6 gap-3">
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-5 h-5 text-teal-400" />
+                  <h3 className="text-base font-bold text-slate-200">Kinesis & SIEM Güvenlik Simülatörü</h3>
                 </div>
 
-                {/* Connection Status Simulation (Online / Offline) */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Bağlantı Durumunu Değiştir</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => handleSendConnectionStatus(selectedDevice, true)}
-                      disabled={selectedDevice === "SN-MALICIOUS-999"}
-                      className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-bold hover:bg-emerald-500/20 active:scale-95 transition-all disabled:opacity-30"
-                    >
-                      <Power className="w-3.5 h-3.5 text-emerald-400" />
-                      Cihazı Aç (ONLINE)
-                    </button>
-                    <button
-                      onClick={() => handleSendConnectionStatus(selectedDevice, false)}
-                      disabled={selectedDevice === "SN-MALICIOUS-999"}
-                      className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-950 text-slate-400 text-xs font-bold hover:bg-slate-900 active:scale-95 transition-all disabled:opacity-30"
-                    >
-                      <Power className="w-3.5 h-3.5 text-slate-500" />
-                      Cihazı Kapat (OFFLINE)
-                    </button>
-                  </div>
-                </div>
-
-                {/* Malicious Attack Simulation Button */}
-                {selectedDevice === "SN-MALICIOUS-999" && (
-                  <div className="p-4 rounded-xl bg-rose-950/20 border border-rose-500/30 text-xs text-rose-300 font-mono">
-                    <AlertTriangle className="w-4 h-4 text-rose-500 mb-1" />
-                    Bu cihaz sistemde kayıtlı değildir. Bu cihazdan telemetri göndermeyi denediğinizde Kinesis hattı yetkisiz denemeyi yakalayacak ve yukarıda flashing bir SIEM Security uyarısı üretecektir.
-                  </div>
-                )}
-              </div>
-
-              {/* Simulator Right Column: Sliders & Send Actions */}
-              <div className="space-y-5">
-                <div>
-                  <div className="flex items-center justify-between text-xs text-slate-400 font-bold uppercase mb-2">
-                    <span>Telemetri Değeri (Sıcaklık/Seviye)</span>
-                    <span className="text-teal-400 font-mono text-sm">{simTemp.toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="150"
-                    step="0.5"
-                    value={simTemp}
-                    onChange={(e) => setSimTemp(Number(e.target.value))}
-                    className="w-full accent-teal-400 bg-slate-800 rounded-lg appearance-none h-1.5 cursor-pointer"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between text-xs text-slate-400 font-bold uppercase mb-2">
-                    <span>Sistem Atmosfer Basıncı (hPa)</span>
-                    <span className="text-indigo-400 font-mono text-sm">{simPress.toFixed(0)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="950"
-                    max="1060"
-                    step="1"
-                    value={simPress}
-                    onChange={(e) => setSimPress(Number(e.target.value))}
-                    className="w-full accent-indigo-400 bg-slate-800 rounded-lg appearance-none h-1.5 cursor-pointer"
-                  />
-                </div>
-
+                {/* Loop simulation control */}
                 <button
-                  onClick={() => handleSendTelemetry(selectedDevice, simTemp, simPress)}
-                  disabled={isSending || isAutoSim}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-teal-500 to-indigo-500 text-slate-950 hover:from-teal-400 hover:to-indigo-400 disabled:opacity-50 text-sm font-black tracking-wide active:scale-98 transition-all flex items-center justify-center gap-2"
+                  onClick={() => setIsAutoSim(!isAutoSim)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95 self-end sm:self-auto ${
+                    isAutoSim
+                      ? "bg-amber-600 hover:bg-amber-500 text-white animate-pulse"
+                      : "bg-teal-500 hover:bg-teal-400 text-slate-950"
+                  }`}
                 >
-                  {isSending ? (
-                    "Yükleniyor..."
+                  {isAutoSim ? (
+                    <>
+                      <Pause className="w-3.5 h-3.5" />
+                      Oto-Simülatör Durdur
+                    </>
                   ) : (
                     <>
-                      <Send className="w-4 h-4" />
-                      Kinesis'e Telemetri Pompala (POST)
+                      <Play className="w-3.5 h-3.5" />
+                      Oto-Simülatör Başlat (2s)
                     </>
                   )}
                 </button>
               </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* Simulator Left Column: Connection Status & Malicious Actions */}
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Simüle Edilecek Sensör</label>
+                    <select
+                      value={selectedDevice}
+                      onChange={(e) => setSelectedDevice(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none"
+                    >
+                      {SEED_DEVICES.map((d) => (
+                        <option key={d.serialNumber} value={d.serialNumber}>
+                          [{d.serialNumber}] {d.name}
+                        </option>
+                      ))}
+                      <option value="SN-MALICIOUS-999">🚨 [GÜVENLİK İHLALİ] Kayıt Dışı Cihaz SN-MALICIOUS-999</option>
+                    </select>
+                  </div>
+
+                  {/* Connection Status Simulation (Online / Offline) */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Bağlantı Durumunu Değiştir</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => handleSendConnectionStatus(selectedDevice, true)}
+                        disabled={selectedDevice === "SN-MALICIOUS-999"}
+                        className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-bold hover:bg-emerald-500/20 active:scale-95 transition-all disabled:opacity-30"
+                      >
+                        <Power className="w-3.5 h-3.5 text-emerald-400" />
+                        Cihazı Aç (ONLINE)
+                      </button>
+                      <button
+                        onClick={() => handleSendConnectionStatus(selectedDevice, false)}
+                        disabled={selectedDevice === "SN-MALICIOUS-999"}
+                        className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-800 bg-slate-950 text-slate-400 text-xs font-bold hover:bg-slate-900 active:scale-95 transition-all disabled:opacity-30"
+                      >
+                        <Power className="w-3.5 h-3.5 text-slate-500" />
+                        Cihazı Kapat (OFFLINE)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Malicious Attack Simulation Button */}
+                  {selectedDevice === "SN-MALICIOUS-999" && (
+                    <div className="p-4 rounded-xl bg-rose-950/20 border border-rose-500/30 text-xs text-rose-300 font-mono">
+                      <AlertTriangle className="w-4 h-4 text-rose-500 mb-1" />
+                      Bu cihaz sistemde kayıtlı değildir. Bu cihazdan telemetri göndermeyi denediğinizde Kinesis hattı yetkisiz denemeyi yakalayacak ve yukarıda flashing bir SIEM Security uyarısı üretecektir.
+                    </div>
+                  )}
+                </div>
+
+                {/* Simulator Right Column: Sliders & Send Actions */}
+                <div className="space-y-5">
+                  <div>
+                    <div className="flex items-center justify-between text-xs text-slate-400 font-bold uppercase mb-2">
+                      <span>Telemetri Değeri (Sıcaklık/Seviye)</span>
+                      <span className="text-teal-400 font-mono text-sm">{simTemp.toFixed(1)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="150"
+                      step="0.5"
+                      value={simTemp}
+                      onChange={(e) => setSimTemp(Number(e.target.value))}
+                      className="w-full accent-teal-400 bg-slate-800 rounded-lg appearance-none h-1.5 cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between text-xs text-slate-400 font-bold uppercase mb-2">
+                      <span>Sistem Atmosfer Basıncı (hPa)</span>
+                      <span className="text-indigo-400 font-mono text-sm">{simPress.toFixed(0)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="950"
+                      max="1060"
+                      step="1"
+                      value={simPress}
+                      onChange={(e) => setSimPress(Number(e.target.value))}
+                      className="w-full accent-indigo-400 bg-slate-800 rounded-lg appearance-none h-1.5 cursor-pointer"
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => handleSendTelemetry(selectedDevice, simTemp, simPress)}
+                    disabled={isSending || isAutoSim}
+                    className="w-full py-3 rounded-xl bg-gradient-to-r from-teal-500 to-indigo-500 text-slate-950 hover:from-teal-400 hover:to-indigo-400 disabled:opacity-50 text-sm font-black tracking-wide active:scale-98 transition-all flex items-center justify-center gap-2"
+                  >
+                    {isSending ? (
+                      "Yükleniyor..."
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        Kinesis'e Telemetri Pompala (POST)
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Right Column: WebSocket Live Terminal Log */}

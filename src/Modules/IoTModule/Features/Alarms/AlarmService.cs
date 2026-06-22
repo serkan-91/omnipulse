@@ -79,7 +79,7 @@ public class AlarmService(
                     await dbContext.SaveChangesAsync(cancellationToken);
 
                     // SignalR Broadcast
-                    await hubContext.Clients.Group(notification.TenantId.ToString())
+                    await hubContext.Clients.Group($"TENANT_GROUP_{notification.TenantId}")
                         .SendAsync("ReceiveAlarm", new
                         {
                             AlarmId = alarmEvent.Id,
@@ -122,7 +122,7 @@ public class AlarmService(
                     await dbContext.SaveChangesAsync(cancellationToken);
 
                     // SignalR Broadcast
-                    await hubContext.Clients.Group(notification.TenantId.ToString())
+                    await hubContext.Clients.Group($"TENANT_GROUP_{notification.TenantId}")
                         .SendAsync("AlarmResolved", new
                         {
                             AlarmId = activeAlarm.Id,

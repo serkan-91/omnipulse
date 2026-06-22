@@ -60,7 +60,6 @@ public static class SecretManager
             {
                 "jwt-key" => "/etc/omnipulse-jwt.cred",
                 "postgres-key" => "/etc/omnipulse-postgres.cred",
-                "cosmos-db-key" => "/etc/omnipulse-secrets.cred",
                 _ => $"/etc/{secretName}.cred"
             };
 
@@ -77,7 +76,6 @@ public static class SecretManager
             {
                 "jwt-key" => Path.Combine(baseDir, "omnipulse-jwt.cred"),
                 "postgres-key" => Path.Combine(baseDir, "omnipulse-postgres.cred"),
-                "cosmos-db-key" => Path.Combine(baseDir, "omnipulse-secrets.cred"),
                 _ => Path.Combine(baseDir, $"{secretName}.cred")
             };
 

@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
 using OmniPulse.Modules.IoTModule.Features.Telemetry.IngestTelemetry;
 using OmniPulse.Modules.IoTModule.Features.Telemetry.GetTelemetry;
 using OmniPulse.Modules.IoTModule.Features.Telemetry.ReportDeviceStatus;
@@ -13,7 +15,7 @@ using OmniPulse.Modules.IoTModule.Features.Alarms.CreateAlarmRule;
 using OmniPulse.Modules.IoTModule.Features.Alarms.GetAlarmRules;
 using OmniPulse.Modules.IoTModule.Features.Telemetry.GetTelemetryReport;
 
-namespace OmniPulse.Identity.API.Endpoints;
+namespace OmniPulse.Modules.IoTModule;
 
 public static class IoTEndpoints
 {

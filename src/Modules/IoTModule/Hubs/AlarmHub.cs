@@ -22,7 +22,7 @@ public class AlarmHub : Hub
         if (Guid.TryParse(tenantIdClaim, out var tenantId))
         {
             // Kullanıcıyı kiracısına özel SignalR grubuna ekliyoruz 🛡️
-            await Groups.AddToGroupAsync(Context.ConnectionId, tenantId.ToString());
+            await Groups.AddToGroupAsync(Context.ConnectionId, $"TENANT_GROUP_{tenantId}");
         }
 
         await base.OnConnectedAsync();

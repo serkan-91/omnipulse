@@ -131,7 +131,7 @@ Geliştirme süresince tamamlanmış işler ve gelecek planları aşağıdaki gi
 - [ ] **End-to-End Test Paketi**: Kimlik doğrulama, Ingestion ve Alarm tetikleme akışları için entegrasyon testlerinin hazırlanması.
 
 #### D. Canlı Ortam Hazırlığı (Production Readiness)
-- [ ] **Kinesis Checkpoint Mekanizması (KCL)**: Geliştirme ortamında kullanılan `LATEST` iterator tipi yerine, canlı ortamda veri kaybını önlemek adına DynamoDB tabanlı checkpointing (`AFTER_SEQUENCE_NUMBER` / `TRIM_HORIZON`) ve lease (kilit) yönetim yapısının entegre edilmesi.
+- [x] **Kinesis Checkpoint Mekanizması (KCL)**: Geliştirme ortamında kullanılan `LATEST` iterator tipi yerine, canlı ortamda veri kaybını önlemek adına DynamoDB tabanlı checkpointing (`AFTER_SEQUENCE_NUMBER` / `TRIM_HORIZON`) ve lease (kilit) yönetim yapısının entegre edilmesi.
 
 ---
 **Tarih:** 2026-06-22  

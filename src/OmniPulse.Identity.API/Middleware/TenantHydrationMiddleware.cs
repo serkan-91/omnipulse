@@ -16,8 +16,45 @@ public class TenantHydrationMiddleware(RequestDelegate next)
         HttpContext context,
         IUserTenantContext userTenantContext,
         ITenantService tenantService,
-        IdentityDbContext dbContext)
+        IdentityDbContext dbContext,
+        ITokenRevocationService tokenRevocationService)
     {
+        // 0. Token Revocation (Blacklist) Kontrolü 🛡️
+        var jti = context.User?.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti)?.Value
+                  ?? context.User?.FindFirst("jti")?.Value
+                  ?? context.User?.FindFirst("http://schemas.xmlsoap.org/ws/2009/09/identity/claims/jwtid")?.Value;
+        if (!string.IsNullOrEmpty(jti))
+        {
+            var isBlacklisted = await tokenRevocationService.IsTokenBlacklistedAsync(jti);
+            if (isBlacklisted)
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.ContentType = "application/json";
+                
+                var responseObj = new { isSuccess = false, message = "Bu oturum kapatılmış veya yetkileriniz iptal edilmiştir." };
+                var json = JsonSerializer.Serialize(responseObj);
+                await context.Response.WriteAsync(json);
+                return;
+            }
+        }
+
+        var userId = context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                     ?? context.User?.FindFirst("sub")?.Value;
+        if (!string.IsNullOrEmpty(userId))
+        {
+            var isUserRevoked = await tokenRevocationService.IsUserRevokedAsync(userId);
+            if (isUserRevoked)
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.ContentType = "application/json";
+                
+                var responseObj = new { isSuccess = false, message = "Bu kullanıcı hesabı askıya alınmış veya yetkileri iptal edilmiştir." };
+                var json = JsonSerializer.Serialize(responseObj);
+                await context.Response.WriteAsync(json);
+                return;
+            }
+        }
+
         // 1. Zaten el ile set edilmiş bir kiracı varsa dokunma (örn. testlerde)
         if (tenantService.GetCurrentTenant() != null)
         {

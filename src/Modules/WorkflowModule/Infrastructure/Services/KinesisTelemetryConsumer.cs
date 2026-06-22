@@ -49,13 +49,15 @@ public partial class KinesisTelemetryConsumer : BackgroundService
 
     private readonly IAmazonKinesis? _kinesis;
     private readonly IAmazonSQS? _sqs;
+    private readonly Amazon.DynamoDBv2.IAmazonDynamoDB? _dynamoDb;
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<KinesisTelemetryConsumer> _logger;
     private readonly IHubContext<TelemetryHub>? _hubContext;
     private readonly string _streamName;
     private readonly string _dlqQueueUrl;
     private readonly bool _isEnabled;
-    private readonly ConcurrentDictionary<string, Task> _activeShardTasks = new();
+    private readonly string _workerId = $"{Environment.MachineName}-{Guid.NewGuid().ToString()[..8]}";
+    private readonly ConcurrentDictionary<string, (Task Task, CancellationTokenSource Cts)> _activeShardTasks = new();
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -65,6 +67,7 @@ public partial class KinesisTelemetryConsumer : BackgroundService
     public KinesisTelemetryConsumer(
         IAmazonKinesis? kinesis,
         IAmazonSQS? sqs,
+        Amazon.DynamoDBv2.IAmazonDynamoDB? dynamoDb,
         IServiceProvider serviceProvider,
         IConfiguration configuration,
         ILogger<KinesisTelemetryConsumer> logger,
@@ -72,6 +75,7 @@ public partial class KinesisTelemetryConsumer : BackgroundService
     {
         _kinesis = kinesis;
         _sqs = sqs;
+        _dynamoDb = dynamoDb;
         _serviceProvider = serviceProvider;
         _logger = logger;
         _hubContext = hubContext;
@@ -95,8 +99,13 @@ public partial class KinesisTelemetryConsumer : BackgroundService
         }
     }
 
+    private bool _useBypass;
+    private int _bypassPollCount = 0;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _useBypass = _dynamoDb == null;
+
         if (!_isEnabled)
         {
             // Dev modunda simülasyon veya bekleme
@@ -117,26 +126,31 @@ public partial class KinesisTelemetryConsumer : BackgroundService
                 // Biten, iptal olan veya hata veren task'ları sözlükten temizle (ekstra güvenlik önlemi)
                 foreach (var kvp in _activeShardTasks)
                 {
-                    if (kvp.Value.IsCompleted)
+                    if (kvp.Value.Task.IsCompleted)
                     {
                         _activeShardTasks.TryRemove(kvp.Key, out _);
+                    }
+                }
+
+                // DynamoDB bypass modundaysak bağlantıyı periyodik olarak kontrol etmeyi dene
+                if (_useBypass && _dynamoDb != null)
+                {
+                    _bypassPollCount++;
+                    if (_bypassPollCount >= 20) // Her 20 döngüde bir (yaklaşık 5 dakikada bir)
+                    {
+                        _logger.LogInformation("🔄 [LeaseManager] DynamoDB bağlantısı tekrar deneniyor...");
+                        _useBypass = false;
+                        _bypassPollCount = 0;
                     }
                 }
 
                 // 1. Shard'ları listele
                 var describeRequest = new DescribeStreamRequest { StreamName = _streamName };
                 var describeResponse = await _kinesis!.DescribeStreamAsync(describeRequest, stoppingToken);
-                var shards = describeResponse.StreamDescription.Shards;
+                var shards = describeResponse.StreamDescription.Shards.ToList();
 
-                foreach (var shard in shards)
-                {
-                    var shardId = shard.ShardId;
-
-                    // Eğer bu shard şu an aktif olarak işlenmiyorsa, yeni bir task başlat
-                    if (_activeShardTasks.ContainsKey(shardId)) continue;
-                    var task = Task.Run(() => ProcessShardAsync(shardId, stoppingToken), stoppingToken);
-                    _activeShardTasks.TryAdd(shardId, task);
-                }
+                // 2. Kilitleri dengele ve işlemleri yönet (Acquire, Renew, Steal, Stop)
+                await AcquireRenewOrBalanceLeasesAsync(shards, stoppingToken);
             }
             catch (Exception ex)
             {
@@ -145,7 +159,7 @@ public partial class KinesisTelemetryConsumer : BackgroundService
 
             try
             {
-                // Shard listesini güncellemek için bekleme (örn. 15 saniye)
+                // Shard listesini güncellemek ve kilitleri tazelemek için bekleme (örn. 15 saniye)
                 await Task.Delay(15000, stoppingToken);
             }
             catch (OperationCanceledException)
@@ -157,24 +171,53 @@ public partial class KinesisTelemetryConsumer : BackgroundService
         // Tüketici durdurulduğunda tüm aktif shard işlemlerinin tamamlanmasını bekle
         try
         {
-            await Task.WhenAll(_activeShardTasks.Values);
+            await Task.WhenAll(_activeShardTasks.Values.Select(v => v.Task));
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Tüketici durdurulurken bazı shard işlemleri hata fırlattı.");
         }
+
+        // Kapatılırken kilitleri serbest bırak (sadece sahipliği UNOWNED yaparak checkpoint'leri koru)
+        await ReleaseLeasesAsync();
     }
 
     private async Task ProcessShardAsync(string shardId, CancellationToken cancellationToken)
     {
         try
         {
-            var iteratorRequest = new GetShardIteratorRequest
+            var checkpoint = await GetCheckpointAsync(shardId, cancellationToken);
+            GetShardIteratorRequest iteratorRequest;
+
+            if (!string.IsNullOrEmpty(checkpoint))
             {
-                StreamName = _streamName,
-                ShardId = shardId,
-                ShardIteratorType = ShardIteratorType.LATEST
-            };
+                _logger.LogInformation("💾 [KinesisConsumer] Shard {ShardId} için checkpoint bulundu. Kaldığı yer: {Checkpoint}", shardId, checkpoint);
+                iteratorRequest = new GetShardIteratorRequest
+                {
+                    StreamName = _streamName,
+                    ShardId = shardId,
+                    ShardIteratorType = ShardIteratorType.AFTER_SEQUENCE_NUMBER,
+                    StartingSequenceNumber = checkpoint
+                };
+            }
+            else
+            {
+                // Konfigürasyondan varsayılan iterator tipini al (canlıda TRIM_HORIZON, localstack'te LATEST gibi)
+                var defaultIteratorTypeStr = _serviceProvider.GetRequiredService<IConfiguration>()
+                    .GetValue<string>("AWS:Kinesis:ShardIteratorType") ?? "TRIM_HORIZON";
+
+                var defaultIteratorType = ShardIteratorType.FindValue(defaultIteratorTypeStr);
+
+                _logger.LogInformation("🆕 [KinesisConsumer] Shard {ShardId} için checkpoint bulunamadı. Varsayılan iterator ile başlanıyor: {IteratorType}", 
+                    shardId, defaultIteratorType.Value);
+
+                iteratorRequest = new GetShardIteratorRequest
+                {
+                    StreamName = _streamName,
+                    ShardId = shardId,
+                    ShardIteratorType = defaultIteratorType
+                };
+            }
 
             var iteratorResponse = await _kinesis!.GetShardIteratorAsync(iteratorRequest, cancellationToken);
             var iterator = iteratorResponse.ShardIterator;
@@ -189,13 +232,23 @@ public partial class KinesisTelemetryConsumer : BackgroundService
                 };
 
                 var getRecordsResponse = await _kinesis!.GetRecordsAsync(getRecordsRequest, cancellationToken);
-                foreach (var record in getRecordsResponse.Records)
+                
+                if (getRecordsResponse.Records.Count > 0)
                 {
-                    await ProcessRecordWithRetryAsync(record, cancellationToken);
+                    foreach (var record in getRecordsResponse.Records)
+                    {
+                        await ProcessRecordWithRetryAsync(record, cancellationToken);
+                    }
+
+                    // Başarılı bir şekilde işlenen son kaydın sequence numarasını checkpoint olarak kaydet
+                    var lastRecord = getRecordsResponse.Records[^1];
+                    await SaveCheckpointAsync(shardId, lastRecord.SequenceNumber, cancellationToken);
                 }
 
                 iterator = getRecordsResponse.NextShardIterator;
-                await Task.Delay(1000, cancellationToken); // Kinesis rate limit'i aşmamak için bekleme
+                
+                // Kinesis rate limit'i aşmamak için bekleme (her shard için 1 saniye)
+                await Task.Delay(1000, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -208,11 +261,14 @@ public partial class KinesisTelemetryConsumer : BackgroundService
         }
         finally
         {
-            _activeShardTasks.TryRemove(shardId, out _);
+            if (_activeShardTasks.TryRemove(shardId, out var item))
+            {
+                item.Cts.Dispose();
+            }
         }
     }
 
-    private async Task ProcessRecordWithRetryAsync(Record record, CancellationToken cancellationToken)
+    private async Task ProcessRecordWithRetryAsync(Amazon.Kinesis.Model.Record record, CancellationToken cancellationToken)
     {
         string rawData = string.Empty;
         try
@@ -253,7 +309,7 @@ public partial class KinesisTelemetryConsumer : BackgroundService
 
                         if (_hubContext != null)
                         {
-                            var tenantGroup = payload.TenantId != Guid.Empty ? payload.TenantId.ToString() : "demo-tenant";
+                            var tenantGroup = payload.TenantId != Guid.Empty ? $"TENANT_GROUP_{payload.TenantId}" : "demo-tenant";
                             await _hubContext.Clients.Groups(tenantGroup, "demo-tenant").SendAsync(
                                 "ReceiveSecurityAlert",
                                 new
@@ -278,7 +334,7 @@ public partial class KinesisTelemetryConsumer : BackgroundService
 
                         if (_hubContext != null)
                         {
-                            var tenantGroup = payload.TenantId != Guid.Empty ? payload.TenantId.ToString() : "demo-tenant";
+                            var tenantGroup = payload.TenantId != Guid.Empty ? $"TENANT_GROUP_{payload.TenantId}" : "demo-tenant";
                             await _hubContext.Clients.Groups(tenantGroup, "demo-tenant").SendAsync(
                                 "ReceiveDeviceStatus",
                                 new
@@ -366,7 +422,7 @@ public partial class KinesisTelemetryConsumer : BackgroundService
                         // Canlı izleme paneli için telemetriyi SignalR üzerinden yayınla 📊⚡
                         if (_hubContext != null)
                         {
-                            var groups = new[] { command.TenantId.ToString(), "demo-tenant" };
+                            var groups = new[] { $"TENANT_GROUP_{command.TenantId}", "demo-tenant" };
                             await _hubContext.Clients.Groups(groups).SendAsync(
                                 "ReceiveTelemetry",
                                 new
@@ -440,6 +496,530 @@ public partial class KinesisTelemetryConsumer : BackgroundService
         catch (Exception dlqEx)
         {
             LogDlqCriticalError(dlqEx, rawData);
+        }
+    }
+
+    private class LeaseRecord
+    {
+        public string ShardId { get; set; } = null!;
+        public string? LeaseOwner { get; set; }
+        public long LeaseExpiration { get; set; }
+        public int Version { get; set; }
+        public string? SequenceNumber { get; set; }
+    }
+
+    private async Task<List<LeaseRecord>> GetAllLeasesAsync(CancellationToken cancellationToken)
+    {
+        var list = new List<LeaseRecord>();
+        if (_useBypass || _dynamoDb == null) return list;
+
+        var pk = $"KINESIS_LEASE#{_streamName}";
+
+        try
+        {
+            var queryRequest = new Amazon.DynamoDBv2.Model.QueryRequest
+            {
+                TableName = "OmniPulse_WorkflowTasks",
+                KeyConditionExpression = "PK = :pk",
+                ExpressionAttributeValues = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { ":pk", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } }
+                },
+                ConsistentRead = true
+            };
+
+            var response = await _dynamoDb.QueryAsync(queryRequest, cancellationToken);
+            foreach (var item in response.Items)
+            {
+                var sk = item.GetValueOrDefault("SK")?.S ?? "";
+                if (!sk.StartsWith("SHARD#")) continue;
+
+                var shardId = sk.Substring("SHARD#".Length);
+                var owner = item.GetValueOrDefault("LeaseOwner")?.S;
+                var expStr = item.GetValueOrDefault("LeaseExpiration")?.N;
+                var versionStr = item.GetValueOrDefault("Version")?.N;
+                var seqStr = item.GetValueOrDefault("SequenceNumber")?.S;
+
+                long.TryParse(expStr, out var expiration);
+                int.TryParse(versionStr, out var version);
+
+                list.Add(new LeaseRecord
+                {
+                    ShardId = shardId,
+                    LeaseOwner = owner,
+                    LeaseExpiration = expiration,
+                    Version = version,
+                    SequenceNumber = seqStr
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ [LeaseManager] DynamoDB bağlantısı kurulamadı. Shard kilit yönetimi geçici olarak atlanıyor (Local/Bypass Modu).");
+            _useBypass = true;
+        }
+
+        return list;
+    }
+
+    private async Task TryInitializeLeaseAsync(string shardId, CancellationToken cancellationToken)
+    {
+        if (_useBypass || _dynamoDb == null) return;
+
+        var pk = $"KINESIS_LEASE#{_streamName}";
+        var sk = $"SHARD#{shardId}";
+
+        try
+        {
+            var putRequest = new Amazon.DynamoDBv2.Model.PutItemRequest
+            {
+                TableName = "OmniPulse_WorkflowTasks",
+                Item = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { "PK", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } },
+                    { "SK", new Amazon.DynamoDBv2.Model.AttributeValue { S = sk } },
+                    { "LeaseOwner", new Amazon.DynamoDBv2.Model.AttributeValue { S = "UNOWNED" } },
+                    { "LeaseExpiration", new Amazon.DynamoDBv2.Model.AttributeValue { N = "0" } },
+                    { "Version", new Amazon.DynamoDBv2.Model.AttributeValue { N = "1" } }
+                },
+                ConditionExpression = "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+            };
+
+            await _dynamoDb.PutItemAsync(putRequest, cancellationToken);
+            _logger.LogInformation("🔑 [LeaseManager] Shard {ShardId} için kilit kaydı ilk kez oluşturuldu.", shardId);
+        }
+        catch (Amazon.DynamoDBv2.Model.ConditionalCheckFailedException)
+        {
+            // Zaten oluşturulmuş, sorun değil
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [LeaseManager] Shard {ShardId} için kilit kaydı oluşturulurken hata.", shardId);
+        }
+    }
+
+    private async Task AcquireRenewOrBalanceLeasesAsync(List<Shard> shards, CancellationToken cancellationToken)
+    {
+        var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        
+        // 1. DynamoDB'deki tüm mevcut kilit kayıtlarını oku
+        var leases = await GetAllLeasesAsync(cancellationToken);
+        
+        // 2. Kinesis'ten gelen ama DynamoDB'de kaydı olmayan shard'lar varsa bunları başlat
+        var leaseMap = leases.ToDictionary(l => l.ShardId);
+        foreach (var shard in shards)
+        {
+            if (!leaseMap.ContainsKey(shard.ShardId))
+            {
+                await TryInitializeLeaseAsync(shard.ShardId, cancellationToken);
+                var newLease = new LeaseRecord
+                {
+                    ShardId = shard.ShardId,
+                    LeaseOwner = "UNOWNED",
+                    LeaseExpiration = 0,
+                    Version = 1
+                };
+                leases.Add(newLease);
+                leaseMap[shard.ShardId] = newLease;
+            }
+        }
+
+        // 3. Aktif worker'ları belirle
+        var activeWorkers = leases
+            .Where(l => l.LeaseOwner != null && l.LeaseOwner != "UNOWNED" && l.LeaseExpiration >= nowSeconds)
+            .Select(l => l.LeaseOwner!)
+            .Distinct()
+            .ToList();
+
+        if (!activeWorkers.Contains(_workerId))
+        {
+            activeWorkers.Add(_workerId);
+        }
+
+        int n = shards.Count;
+        int m = activeWorkers.Count;
+        int targetCount = (int)Math.Ceiling((double)n / m);
+
+        _logger.LogInformation("📊 [LeaseBalancer] Toplam Shard Sayısı: {ShardCount}, Aktif Worker Sayısı: {WorkerCount}, Hedef Shard/Worker: {TargetCount}",
+            n, m, targetCount);
+
+        // 4. Kendi kilitlerimizi belirle
+        var myLeases = leases.Where(l => l.LeaseOwner == _workerId).ToList();
+        
+        // 5. Boştaki veya süresi dolmuş kilitleri belirle
+        var availableLeases = leases
+            .Where(l => l.LeaseOwner == "UNOWNED" || l.LeaseExpiration < nowSeconds)
+            .ToList();
+
+        // 6. Diğer worker'ların kilit sayılarını hesapla
+        var workerLeaseCounts = activeWorkers
+            .ToDictionary(w => w, w => leases.Count(l => l.LeaseOwner == w && l.LeaseExpiration >= nowSeconds));
+
+        // Adım A: Kendi kilitlerimizi uzat (Renew)
+        foreach (var lease in myLeases)
+        {
+            var success = await TryRenewLeaseInternalAsync(lease, cancellationToken);
+            if (success)
+            {
+                if (!_activeShardTasks.ContainsKey(lease.ShardId))
+                {
+                    StartShardProcessing(lease.ShardId, cancellationToken);
+                }
+            }
+            else
+            {
+                StopShardProcessing(lease.ShardId);
+            }
+        }
+
+        var activeMyLeases = leases.Where(l => l.LeaseOwner == _workerId && l.LeaseExpiration >= nowSeconds).ToList();
+        int myCount = activeMyLeases.Count;
+
+        // Adım B: Eğer hedef kilit sayımızın altındaysak, boşta/süresi dolmuş kilitleri al
+        if (myCount < targetCount && availableLeases.Count > 0)
+        {
+            foreach (var lease in availableLeases)
+            {
+                if (myCount >= targetCount) break;
+
+                var success = await TryAcquireExpiredLeaseInternalAsync(lease, cancellationToken);
+                if (success)
+                {
+                    myCount++;
+                    StartShardProcessing(lease.ShardId, cancellationToken);
+                }
+            }
+        }
+
+        // Adım C: Hâlâ hedef kilit sayımızın altındaysak ve boşta kilit kalmadıysa, en çok kilidi olan worker'dan çal!
+        if (myCount < targetCount)
+        {
+            var overAllocatedWorkers = workerLeaseCounts
+                .Where(kvp => kvp.Key != _workerId && kvp.Value > targetCount)
+                .OrderByDescending(kvp => kvp.Value)
+                .ToList();
+
+            if (overAllocatedWorkers.Count > 0)
+            {
+                var targetWorker = overAllocatedWorkers[0].Key;
+                var targetLease = leases.FirstOrDefault(l => l.LeaseOwner == targetWorker && l.LeaseExpiration >= nowSeconds);
+                if (targetLease != null)
+                {
+                    _logger.LogInformation("🏴‍☠️ [LeaseBalancer] Bizde {MyCount} kilit var, Hedef {TargetCount}. {TargetWorker} üzerinde {TheirCount} kilit var. Shard {ShardId} kilidini çalmaya çalışıyoruz...",
+                        myCount, targetCount, targetWorker, overAllocatedWorkers[0].Value, targetLease.ShardId);
+
+                    var success = await TryStealLeaseInternalAsync(targetLease, targetWorker, cancellationToken);
+                    if (success)
+                    {
+                        StartShardProcessing(targetLease.ShardId, cancellationToken);
+                    }
+                }
+            }
+        }
+
+        // Adım D: Bizim aktif olarak işlediğimiz ama kilit listesinde başkasına geçmiş veya süresi dolmuş shard'ları durdur (Emniyet kemeri)
+        var currentlyOwnedShardIds = leases
+            .Where(l => l.LeaseOwner == _workerId && l.LeaseExpiration >= nowSeconds)
+            .Select(l => l.ShardId)
+            .ToHashSet();
+
+        foreach (var activeShardId in _activeShardTasks.Keys)
+        {
+            if (!currentlyOwnedShardIds.Contains(activeShardId))
+            {
+                _logger.LogWarning("⚠️ [LeaseBalancer] Shard {ShardId} kilit sahipliği doğrulanmadı, işleme durduruluyor.", activeShardId);
+                StopShardProcessing(activeShardId);
+            }
+        }
+    }
+
+    private async Task<bool> TryRenewLeaseInternalAsync(LeaseRecord lease, CancellationToken cancellationToken)
+    {
+        if (_useBypass || _dynamoDb == null) return true;
+
+        var pk = $"KINESIS_LEASE#{_streamName}";
+        var sk = $"SHARD#{lease.ShardId}";
+        var leaseDurationSeconds = 30;
+        var expirationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + leaseDurationSeconds;
+
+        try
+        {
+            var updateRequest = new Amazon.DynamoDBv2.Model.UpdateItemRequest
+            {
+                TableName = "OmniPulse_WorkflowTasks",
+                Key = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { "PK", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } },
+                    { "SK", new Amazon.DynamoDBv2.Model.AttributeValue { S = sk } }
+                },
+                UpdateExpression = "SET LeaseExpiration = :exp, Version = :newVersion",
+                ConditionExpression = "Version = :expectedVersion AND LeaseOwner = :owner",
+                ExpressionAttributeValues = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { ":exp", new Amazon.DynamoDBv2.Model.AttributeValue { N = expirationTime.ToString() } },
+                    { ":newVersion", new Amazon.DynamoDBv2.Model.AttributeValue { N = (lease.Version + 1).ToString() } },
+                    { ":expectedVersion", new Amazon.DynamoDBv2.Model.AttributeValue { N = lease.Version.ToString() } },
+                    { ":owner", new Amazon.DynamoDBv2.Model.AttributeValue { S = _workerId } }
+                }
+            };
+
+            await _dynamoDb.UpdateItemAsync(updateRequest, cancellationToken);
+            lease.LeaseExpiration = expirationTime;
+            lease.Version++;
+            _logger.LogDebug("🔄 [LeaseBalancer] Shard {ShardId} kilidi uzatıldı.", lease.ShardId);
+            return true;
+        }
+        catch (Amazon.DynamoDBv2.Model.ConditionalCheckFailedException)
+        {
+            _logger.LogWarning("⚠️ [LeaseBalancer] Shard {ShardId} kilidi uzatılamadı (yarış durumu/sahiplik değişti).", lease.ShardId);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [LeaseBalancer] Shard {ShardId} kilidi uzatılırken beklenmeyen hata.", lease.ShardId);
+            return false;
+        }
+    }
+
+    private async Task<bool> TryAcquireExpiredLeaseInternalAsync(LeaseRecord lease, CancellationToken cancellationToken)
+    {
+        if (_useBypass || _dynamoDb == null) return true;
+
+        var pk = $"KINESIS_LEASE#{_streamName}";
+        var sk = $"SHARD#{lease.ShardId}";
+        var leaseDurationSeconds = 30;
+        var expirationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + leaseDurationSeconds;
+
+        try
+        {
+            var updateRequest = new Amazon.DynamoDBv2.Model.UpdateItemRequest
+            {
+                TableName = "OmniPulse_WorkflowTasks",
+                Key = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { "PK", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } },
+                    { "SK", new Amazon.DynamoDBv2.Model.AttributeValue { S = sk } }
+                },
+                UpdateExpression = "SET LeaseOwner = :owner, LeaseExpiration = :exp, Version = :newVersion",
+                ConditionExpression = "Version = :expectedVersion",
+                ExpressionAttributeValues = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { ":owner", new Amazon.DynamoDBv2.Model.AttributeValue { S = _workerId } },
+                    { ":exp", new Amazon.DynamoDBv2.Model.AttributeValue { N = expirationTime.ToString() } },
+                    { ":newVersion", new Amazon.DynamoDBv2.Model.AttributeValue { N = (lease.Version + 1).ToString() } },
+                    { ":expectedVersion", new Amazon.DynamoDBv2.Model.AttributeValue { N = lease.Version.ToString() } }
+                }
+            };
+
+            await _dynamoDb.UpdateItemAsync(updateRequest, cancellationToken);
+            lease.LeaseOwner = _workerId;
+            lease.LeaseExpiration = expirationTime;
+            lease.Version++;
+            _logger.LogInformation("🔑 [LeaseBalancer] Shard {ShardId} kilidi boşta/süresi dolmuş olduğu için alındı.", lease.ShardId);
+            return true;
+        }
+        catch (Amazon.DynamoDBv2.Model.ConditionalCheckFailedException)
+        {
+            _logger.LogWarning("⚠️ [LeaseBalancer] Shard {ShardId} kilidi alınamadı (başka bir worker bizden önce davrandı).", lease.ShardId);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [LeaseBalancer] Shard {ShardId} kilidi alınırken beklenmeyen hata.", lease.ShardId);
+            return false;
+        }
+    }
+
+    private async Task<bool> TryStealLeaseInternalAsync(LeaseRecord lease, string currentOwner, CancellationToken cancellationToken)
+    {
+        if (_useBypass || _dynamoDb == null) return true;
+
+        var pk = $"KINESIS_LEASE#{_streamName}";
+        var sk = $"SHARD#{lease.ShardId}";
+        var leaseDurationSeconds = 30;
+        var expirationTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + leaseDurationSeconds;
+
+        try
+        {
+            var updateRequest = new Amazon.DynamoDBv2.Model.UpdateItemRequest
+            {
+                TableName = "OmniPulse_WorkflowTasks",
+                Key = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { "PK", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } },
+                    { "SK", new Amazon.DynamoDBv2.Model.AttributeValue { S = sk } }
+                },
+                UpdateExpression = "SET LeaseOwner = :owner, LeaseExpiration = :exp, Version = :newVersion",
+                ConditionExpression = "Version = :expectedVersion AND LeaseOwner = :expectedOwner",
+                ExpressionAttributeValues = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { ":owner", new Amazon.DynamoDBv2.Model.AttributeValue { S = _workerId } },
+                    { ":exp", new Amazon.DynamoDBv2.Model.AttributeValue { N = expirationTime.ToString() } },
+                    { ":newVersion", new Amazon.DynamoDBv2.Model.AttributeValue { N = (lease.Version + 1).ToString() } },
+                    { ":expectedVersion", new Amazon.DynamoDBv2.Model.AttributeValue { N = lease.Version.ToString() } },
+                    { ":expectedOwner", new Amazon.DynamoDBv2.Model.AttributeValue { S = currentOwner } }
+                }
+            };
+
+            await _dynamoDb.UpdateItemAsync(updateRequest, cancellationToken);
+            lease.LeaseOwner = _workerId;
+            lease.LeaseExpiration = expirationTime;
+            lease.Version++;
+            _logger.LogWarning("🏴‍☠️ [LeaseBalancer] Shard {ShardId} kilidi dengelenme amacıyla {OldOwner} kullanıcısından ÇALINDI.",
+                lease.ShardId, currentOwner);
+            return true;
+        }
+        catch (Amazon.DynamoDBv2.Model.ConditionalCheckFailedException)
+        {
+            _logger.LogWarning("⚠️ [LeaseBalancer] Shard {ShardId} kilidi çalınamadı (versiyon veya sahip değişmiş).", lease.ShardId);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [LeaseBalancer] Shard {ShardId} kilidi çalınırken beklenmeyen hata.", lease.ShardId);
+            return false;
+        }
+    }
+
+    private void StartShardProcessing(string shardId, CancellationToken cancellationToken)
+    {
+        if (!_activeShardTasks.ContainsKey(shardId))
+        {
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var task = Task.Run(() => ProcessShardAsync(shardId, cts.Token), cts.Token);
+            if (_activeShardTasks.TryAdd(shardId, (task, cts)))
+            {
+                _logger.LogInformation("🚀 [KinesisConsumer] Shard {ShardId} için okuma görevi başlatıldı.", shardId);
+            }
+            else
+            {
+                cts.Dispose();
+            }
+        }
+    }
+
+    private void StopShardProcessing(string shardId)
+    {
+        if (_activeShardTasks.TryRemove(shardId, out var item))
+        {
+            _logger.LogWarning("⚠️ [KinesisConsumer] Shard {ShardId} okuma görevi durduruluyor...", shardId);
+            item.Cts.Cancel();
+            item.Cts.Dispose();
+        }
+    }
+
+    private async Task<string?> GetCheckpointAsync(string shardId, CancellationToken cancellationToken)
+    {
+        if (_useBypass || _dynamoDb == null) return null;
+
+        var pk = $"KINESIS_LEASE#{_streamName}";
+        var sk = $"SHARD#{shardId}";
+
+        try
+        {
+            var getRequest = new Amazon.DynamoDBv2.Model.GetItemRequest
+            {
+                TableName = "OmniPulse_WorkflowTasks",
+                Key = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { "PK", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } },
+                    { "SK", new Amazon.DynamoDBv2.Model.AttributeValue { S = sk } }
+                },
+                ConsistentRead = true
+            };
+
+            var response = await _dynamoDb.GetItemAsync(getRequest, cancellationToken);
+            if (response.Item != null && response.Item.TryGetValue("SequenceNumber", out var seqVal))
+            {
+                return seqVal.S;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [CheckpointManager] Shard {ShardId} için checkpoint sorgulanırken hata oluştu.", shardId);
+        }
+
+        return null;
+    }
+
+    private async Task SaveCheckpointAsync(string shardId, string sequenceNumber, CancellationToken cancellationToken)
+    {
+        if (_useBypass || _dynamoDb == null) return;
+
+        var pk = $"KINESIS_LEASE#{_streamName}";
+        var sk = $"SHARD#{shardId}";
+
+        try
+        {
+            var updateRequest = new Amazon.DynamoDBv2.Model.UpdateItemRequest
+            {
+                TableName = "OmniPulse_WorkflowTasks",
+                Key = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { "PK", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } },
+                    { "SK", new Amazon.DynamoDBv2.Model.AttributeValue { S = sk } }
+                },
+                UpdateExpression = "SET SequenceNumber = :seq",
+                ConditionExpression = "LeaseOwner = :owner",
+                ExpressionAttributeValues = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                {
+                    { ":seq", new Amazon.DynamoDBv2.Model.AttributeValue { S = sequenceNumber } },
+                    { ":owner", new Amazon.DynamoDBv2.Model.AttributeValue { S = _workerId } }
+                }
+            };
+
+            await _dynamoDb.UpdateItemAsync(updateRequest, cancellationToken);
+            _logger.LogDebug("💾 [CheckpointManager] Shard {ShardId} için checkpoint kaydedildi: {SequenceNumber}", shardId, sequenceNumber);
+        }
+        catch (Amazon.DynamoDBv2.Model.ConditionalCheckFailedException)
+        {
+            _logger.LogWarning("⚠️ [CheckpointManager] Shard {ShardId} için checkpoint kaydedilemedi, kilit kaybedilmiş olabilir.", shardId);
+            StopShardProcessing(shardId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [CheckpointManager] Shard {ShardId} için checkpoint kaydedilirken hata oluştu.", shardId);
+        }
+    }
+
+    private async Task ReleaseLeasesAsync()
+    {
+        if (_useBypass || _dynamoDb == null) return;
+
+        _logger.LogInformation("🔌 [LeaseManager] Kapatılıyor, sahiplenilen kilitler serbest bırakılıyor...");
+
+        foreach (var shardId in _activeShardTasks.Keys)
+        {
+            var pk = $"KINESIS_LEASE#{_streamName}";
+            var sk = $"SHARD#{shardId}";
+
+            try
+            {
+                var updateRequest = new Amazon.DynamoDBv2.Model.UpdateItemRequest
+                {
+                    TableName = "OmniPulse_WorkflowTasks",
+                    Key = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                    {
+                        { "PK", new Amazon.DynamoDBv2.Model.AttributeValue { S = pk } },
+                        { "SK", new Amazon.DynamoDBv2.Model.AttributeValue { S = sk } }
+                    },
+                    UpdateExpression = "SET LeaseOwner = :unowned, LeaseExpiration = :zero",
+                    ConditionExpression = "LeaseOwner = :owner",
+                    ExpressionAttributeValues = new Dictionary<string, Amazon.DynamoDBv2.Model.AttributeValue>
+                    {
+                        { ":unowned", new Amazon.DynamoDBv2.Model.AttributeValue { S = "UNOWNED" } },
+                        { ":zero", new Amazon.DynamoDBv2.Model.AttributeValue { N = "0" } },
+                        { ":owner", new Amazon.DynamoDBv2.Model.AttributeValue { S = _workerId } }
+                    }
+                };
+
+                await _dynamoDb.UpdateItemAsync(updateRequest);
+                _logger.LogInformation("🔓 [LeaseManager] Shard {ShardId} kilidi serbest bırakıldı.", shardId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "⚠️ [LeaseManager] Shard {ShardId} kilidi serbest bırakılırken hata oluştu.", shardId);
+            }
         }
     }
 

@@ -20,7 +20,7 @@ public class TelemetryHub : Hub
         if (Guid.TryParse(tenantIdClaim, out var tenantId))
         {
             // Kullanıcıyı kendi kiracı grubuna ekle 🛡️
-            await Groups.AddToGroupAsync(Context.ConnectionId, tenantId.ToString());
+            await Groups.AddToGroupAsync(Context.ConnectionId, $"TENANT_GROUP_{tenantId}");
         }
         else
         {

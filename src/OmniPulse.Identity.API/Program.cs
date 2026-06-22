@@ -1,5 +1,4 @@
 using OmniPulse.Identity.API.Configuration;
-using OmniPulse.Identity.API.Endpoints;
 using OmniPulse.Identity.API.Infrastructure;
 using OmniPulse.Modules.TenantModule;
 using OmniPulse.Modules.IoTModule;
@@ -15,7 +14,7 @@ using Serilog;
 var builder = WebApplication.CreateBuilder(args);
 
 // ─── Serilog Yapılandırması ───────────────────────────────────────────────────
-builder.Services.AddSerilog((services, lc) => lc
+builder.Services.AddSerilog((_, lc) => lc
     .WriteTo.Console(
         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}",
         theme: Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme.Code)
@@ -62,7 +61,46 @@ builder.Services.AddOptions<JwtOptions>()
     .ValidateOnStart();
 
 // ─── Modüller ─────────────────────────────────────────────────────────────────
-builder.Services.AddOpenApi(); // .NET 10 yerleşik OpenAPI
+builder.Services.AddOpenApi(options =>
+{
+    options.AddOperationTransformer((operation, _, _) =>
+    {
+        if (operation.Tags == null) return Task.CompletedTask;
+        var oldTags = operation.Tags.ToList();
+        operation.Tags.Clear();
+        foreach (var tagRef in oldTags)
+        {
+            var tag = tagRef.Name;
+            if (tag is "Authentication" or "Tenants Management" or "Tenants")
+            {
+                operation.Tags.Add(new Microsoft.OpenApi.OpenApiTagReference("Tenant Module"));
+            }
+            else if (tag != null && tag.StartsWith("IoT"))
+            {
+                operation.Tags.Add(new Microsoft.OpenApi.OpenApiTagReference("IoT Module"));
+            }
+            else if (tag != null && tag.StartsWith("Workflow"))
+            {
+                operation.Tags.Add(new Microsoft.OpenApi.OpenApiTagReference("Workflow Module"));
+            }
+            else
+            {
+                operation.Tags.Add(tagRef);
+            }
+        }
+        return Task.CompletedTask;
+    });
+
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        if (document.Tags == null) return Task.CompletedTask;
+        document.Tags.Clear();
+        document.Tags.Add(new Microsoft.OpenApi.OpenApiTag { Name = "Tenant Module", Description = "Tenant and Auth Endpoints" });
+        document.Tags.Add(new Microsoft.OpenApi.OpenApiTag { Name = "IoT Module", Description = "IoT and Telemetry Endpoints" });
+        document.Tags.Add(new Microsoft.OpenApi.OpenApiTag { Name = "Workflow Module", Description = "Workflow and Task Endpoints" });
+        return Task.CompletedTask;
+    });
+}); // .NET 10 yerleşik OpenAPI
 builder.Services.AddTenantModule(builder.Configuration); // DatabaseOptions'ı içeride kayıt eder
 builder.Services.AddIoTModule(builder.Configuration);
 builder.Services.AddWorkflowModule(builder.Configuration);
@@ -97,6 +135,20 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorization();
 
 // ─── Uygulama Servisleri ───────────────────────────────────────────────────────
+var redisConn = builder.Configuration.GetConnectionString("RedisConnection");
+if (!string.IsNullOrEmpty(redisConn))
+{
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConn;
+        options.InstanceName = "OmniPulse:";
+    });
+}
+else
+{
+    builder.Services.AddDistributedMemoryCache();
+}
+builder.Services.AddScoped<ITokenRevocationService, TokenRevocationService>();
 builder.Services.AddScoped<IUserTenantContext, UserTenantContext>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
@@ -105,7 +157,7 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.SetIsOriginAllowed(origin => true)
+        policy.SetIsOriginAllowed(_ => true)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();

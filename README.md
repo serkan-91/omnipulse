@@ -8,7 +8,7 @@ Geliştirici ortamınızı kurmak, kullanılan teknolojileri incelemek ve proje 
 
 1. 📋 **[Kurulum, Teknoloji ve Yol Haritası Kılavuzu (omnipulse_todo_list.md)](omnipulse_todo_list.md)**: Projede kullanılan tüm teknolojiler (ve nerede kullanıldıkları), gerekli IDE/programlar, veritabanları, NuGet/npm bileşenleri ve güncel **TODO / Geliştirme Takip Listesi**.
 2. 🚗 **[Evrensel Varlık (Asset) Refaktör Yol Haritası (asset_refactoring_plan.md)](asset_refactoring_plan.md)**: Araç (Vehicle) modelinden genel varlık (Asset) yapısına geçiş için aşamalı teknik refaktör planı.
-3. ⚙️ **[İş Akışı (Workflow Task Engine) Mimari Planı (workflow_strategy_plan.md)](workflow_strategy_plan.md)**: Olay güdümlü ve NoSQL (Cosmos DB) tabanlı iş akışı / görev takip modülü mimari tasarımı.
+3. ⚙️ **[İş Akışı (Workflow Task Engine) Mimari Planı (workflow_strategy_plan.md)](workflow_strategy_plan.md)**: Olay güdümlü ve NoSQL (AWS DynamoDB) tabanlı iş akışı / görev takip modülü mimari tasarımı.
 
 ## 🛠️ Hızlı Başlangıç
 
