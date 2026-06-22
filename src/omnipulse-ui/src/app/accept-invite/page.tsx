@@ -67,7 +67,7 @@ function AcceptInviteForm() {
       
       // Redirect after 1.5 seconds (session cookie is set by BFF)
       setTimeout(() => {
-        router.push("/");
+        router.push("/dashboard");
         router.refresh();
       }, 1500);
 

@@ -76,7 +76,7 @@ export default function RegisterTenant() {
       
       // Redirect to main page after 1.5 seconds (cookie is already set by BFF)
       setTimeout(() => {
-        router.push("/");
+        router.push("/dashboard");
         router.refresh();
       }, 1500);
 
