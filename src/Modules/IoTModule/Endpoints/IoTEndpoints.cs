@@ -15,6 +15,8 @@ using OmniPulse.Modules.IoTModule.Features.Alarms.CreateAlarmRule;
 using OmniPulse.Modules.IoTModule.Features.Alarms.GetAlarmRules;
 using OmniPulse.Modules.IoTModule.Features.Telemetry.GetTelemetryReport;
 using OmniPulse.Modules.IoTModule.Features.Devices.CreateDevice;
+using OmniPulse.Modules.IoTModule.Features.Alarms.GetActiveAlarms;
+using OmniPulse.Modules.IoTModule.Features.Devices.GetTestBenchDevices;
 
 namespace OmniPulse.Modules.IoTModule;
 
@@ -28,6 +30,7 @@ public static class IoTEndpoints
         
         // Cihazlar (Devices) Yönetimi 🔌
         app.MapCreateDeviceEndpoint();
+        app.MapGetTestBenchDevicesEndpoint();
         
         // Cihaz Kategorileri (Device Categories) Ağaç ve CRUD 🌳
         app.MapGetCategoryTreeEndpoint();
@@ -44,6 +47,7 @@ public static class IoTEndpoints
         // Alarm ve Kural Yönetimi (Alarm Rules) 🚨
         app.MapCreateAlarmRuleEndpoint();
         app.MapGetAlarmRulesEndpoint();
+        app.MapGetActiveAlarmsEndpoint();
 
         // Raporlama ve Analitik (Reports) 📊
         app.MapGetTelemetryReportEndpoint();
