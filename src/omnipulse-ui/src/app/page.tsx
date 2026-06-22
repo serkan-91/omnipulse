@@ -110,6 +110,7 @@ export default function TelemetryDashboard() {
 
   // BFF Authentication States 🔒
   const [user, setUser] = useState<{ email: string; tenantIdentifier: string; roles: string[] } | null>(null);
+  const [isGuestMode, setIsGuestMode] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -773,8 +774,8 @@ export default function TelemetryDashboard() {
     );
   }
 
-  // Login form overlay if not logged in
-  if (!user) {
+  // Login form overlay if not logged in and not in guest mode
+  if (!user && !isGuestMode) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-slate-950 text-slate-100 font-sans relative overflow-hidden">
         {/* Decorative Glows */}
@@ -844,6 +845,14 @@ export default function TelemetryDashboard() {
             >
               {isLoggingIn ? "Bağlanıyor..." : "Giriş Yap"}
             </button>
+
+            <button
+              type="button"
+              onClick={() => setIsGuestMode(true)}
+              className="w-full py-3.5 rounded-xl border border-slate-800 bg-slate-950 hover:bg-slate-900 text-teal-400 font-bold text-sm tracking-wide transition-all duration-200 active:scale-98 hover:shadow-lg hover:shadow-teal-500/5 cursor-pointer"
+            >
+              Canlı Demoyu İncele (Girişsiz) ⚡
+            </button>
           </form>
 
           <div className="pt-4 border-t border-slate-900 text-center flex flex-col gap-2.5">
@@ -886,9 +895,9 @@ export default function TelemetryDashboard() {
         {/* User Info & Connection Indicators */}
         <div className="flex items-center gap-4">
           <div className="hidden md:flex flex-col items-end text-xs font-mono">
-            <span className="text-slate-200 font-bold">{user.email}</span>
+            <span className="text-slate-200 font-bold">{user ? user.email : "Demo Ziyaretçi (Guest)"}</span>
             <span className="text-slate-500 text-[10px]">
-              {user.tenantIdentifier ? `@${user.tenantIdentifier}` : ""} &bull; {user.roles.join(", ")}
+              {user ? (user.tenantIdentifier ? `@${user.tenantIdentifier}` : "") : "@demo-sandbox"} &bull; {user ? user.roles.join(", ") : "Ziyaretçi"}
             </span>
           </div>
 
@@ -942,12 +951,21 @@ export default function TelemetryDashboard() {
             )
           )}
 
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800/80 text-slate-300 text-xs font-bold transition-all active:scale-95 cursor-pointer"
-          >
-            Çıkış Yap
-          </button>
+          {user ? (
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800/80 text-slate-300 text-xs font-bold transition-all active:scale-95 cursor-pointer"
+            >
+              Çıkış Yap
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsGuestMode(false)}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-bold transition-all active:scale-95 cursor-pointer hover:shadow-lg hover:shadow-teal-500/10"
+            >
+              Portal Girişi Yap &rarr;
+            </button>
+          )}
         </div>
       </header>
 
