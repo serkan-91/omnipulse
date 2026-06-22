@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { getOrRefreshAccessToken } from "../../utils";
 
-const BACKEND_URL = "http://localhost:5294";
+if (process.env.NODE_ENV === "development") {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
+const BACKEND_URL = "https://localhost:7122";
 
 async function handleProxy(request: Request, context: { params: Promise<{ path?: string[] }> }) {
   try {
@@ -31,7 +35,7 @@ async function handleProxy(request: Request, context: { params: Promise<{ path?:
     }
 
     // Read body if method is not GET or HEAD
-    let body: any = undefined;
+    let body: ArrayBuffer | undefined = undefined;
     if (request.method !== "GET" && request.method !== "HEAD") {
       body = await request.arrayBuffer();
     }
@@ -65,7 +69,7 @@ async function handleProxy(request: Request, context: { params: Promise<{ path?:
       statusText: backendRes.statusText,
       headers: responseHeaders,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("BFF Proxy Error:", error);
     return NextResponse.json({
       isSuccess: false,

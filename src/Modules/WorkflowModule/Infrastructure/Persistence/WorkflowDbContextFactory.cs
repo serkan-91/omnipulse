@@ -10,8 +10,8 @@ public class WorkflowDbContextFactory : IDesignTimeDbContextFactory<WorkflowDbCo
     {
         var optionsBuilder = new DbContextOptionsBuilder<WorkflowDbContext>();
         
-        // Bazzite Linux üzerindeki yerel veritabanı bağlantısı
-        optionsBuilder.UseNpgsql("Host=localhost;Port=5432;Database=omnipulse_shared;Username=omnipulse_admin;Password=SuperSecurePassword123!;");
+        optionsBuilder.UseNpgsql("Host=localhost;Port=5432;Database=omnipulse_shared;Username=omnipulse_admin;Password=SuperSecurePassword123!;",
+            b => b.MigrationsAssembly("OmniPulse.Identity.API"));
 
         IUserTenantContext dummyUserTenantContext = new DummyUserTenantContext();
 

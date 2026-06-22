@@ -13,15 +13,15 @@ import {
   Wifi,
   WifiOff,
   Zap,
-  Gauge,
   Flame,
   Droplet,
   Settings,
   RefreshCw,
   AlertTriangle,
-  Radio,
   Power,
-  ShieldAlert
+  ShieldAlert,
+  UserPlus,
+  ShieldCheck
 } from "lucide-react";
 
 interface TelemetryLog {
@@ -30,7 +30,7 @@ interface TelemetryLog {
   key: string;
   value: number;
   timestamp: string;
-  raw: any;
+  raw: unknown;
 }
 
 interface SecurityAlert {
@@ -50,6 +50,24 @@ interface DeviceState {
   lastPress: number;
   isOnline: boolean;
   history: { temp: number; press: number; time: string }[];
+}
+
+interface TelemetryPayload {
+  deviceId?: string;
+  telemetryKey?: string;
+  telemetryValue?: number;
+  timestamp?: string;
+}
+
+interface SecurityAlertPayload {
+  action?: string;
+  deviceSerialNumber?: string;
+  message?: string;
+}
+
+interface DeviceStatusPayload {
+  deviceSerialNumber?: string;
+  isOnline?: boolean;
 }
 
 const SEED_DEVICES = [
@@ -97,6 +115,14 @@ export default function TelemetryDashboard() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  // Tenant Status & Invite states 👥
+  const [tenantStatus, setTenantStatus] = useState<{ message: string; detectedTenant: string; tenantName: string; activeConnectionString: string } | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("Member");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
+
   // Auto-scroll terminal log
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -110,10 +136,12 @@ export default function TelemetryDashboard() {
         if (res.ok) {
           const data = await res.json();
           if (data.isAuthenticated) {
+            const rolesClaim = data.roles || [];
+            const normalizedRoles = Array.isArray(rolesClaim) ? rolesClaim : [rolesClaim];
             setUser({
               email: data.email,
               tenantIdentifier: data.tenantIdentifier,
-              roles: data.roles
+              roles: normalizedRoles
             });
           }
         }
@@ -125,6 +153,26 @@ export default function TelemetryDashboard() {
     };
     checkAuth();
   }, []);
+
+  // Fetch tenant status when user changes
+  useEffect(() => {
+    const fetchTenantStatus = async () => {
+      if (!user) {
+        setTenantStatus(null);
+        return;
+      }
+      try {
+        const res = await fetch("/api/bff/proxy/api/tenants/current-status");
+        if (res.ok) {
+          const data = await res.json();
+          setTenantStatus(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch tenant status:", err);
+      }
+    };
+    fetchTenantStatus();
+  }, [user]);
 
   // Login handler submitting to Next.js BFF
   const handleLogin = async (e: React.FormEvent) => {
@@ -151,16 +199,51 @@ export default function TelemetryDashboard() {
       const userRes = await fetch("/api/bff/user");
       if (userRes.ok) {
         const userData = await userRes.json();
+        const rolesClaim = userData.roles || [];
+        const normalizedRoles = Array.isArray(rolesClaim) ? rolesClaim : [rolesClaim];
         setUser({
           email: userData.email,
           tenantIdentifier: userData.tenantIdentifier,
-          roles: userData.roles
+          roles: normalizedRoles
         });
       }
-    } catch (err: any) {
-      setLoginError(err.message || "Giriş hatası oluştu.");
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Giriş hatası oluştu.";
+      setLoginError(errMsg);
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  // Invite user command handler
+  const handleSendInvite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setInviteLoading(true);
+    setInviteError(null);
+    setInviteSuccess(null);
+
+    try {
+      const res = await fetch("/api/bff/proxy/api/tenants/invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: inviteEmail.trim().toLowerCase(),
+          role: inviteRole
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.isSuccess) {
+        throw new Error(data.message || "Davet gönderilemedi.");
+      }
+
+      setInviteSuccess(data.message || "Kullanıcı başarıyla davet edildi.");
+      setInviteEmail("");
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Davet işlemi başarısız oldu.";
+      setInviteError(errMsg);
+    } finally {
+      setInviteLoading(false);
     }
   };
 
@@ -180,171 +263,179 @@ export default function TelemetryDashboard() {
 
   // Connect to SignalR with temporary WS access token from BFF
   useEffect(() => {
-    if (!authChecked || !user) {
-      setHubStatus("Disconnected");
-      return;
-    }
+    let activeConnection: signalR.HubConnection | null = null;
 
-    const backendUrl = "http://localhost:5294";
-    const hubUrl = `${backendUrl}/hubs/telemetry`;
+    const connectToHub = async () => {
+      if (!authChecked || !user) {
+        setHubStatus("Disconnected");
+        return;
+      }
 
-    console.log(`Connecting to SignalR Hub at: ${hubUrl}`);
-    setHubStatus("Connecting");
+      const hubUrl = "https://localhost:7122/hubs/telemetry";
 
-    const newConnection = new signalR.HubConnectionBuilder()
-      .withUrl(hubUrl, {
-        accessTokenFactory: async () => {
-          try {
-            const res = await fetch("/api/bff/ws-token");
-            if (res.ok) {
-              const data = await res.json();
-              return data.token || "";
+      console.log(`Connecting to SignalR Hub at: ${hubUrl}`);
+      setHubStatus("Connecting");
+
+      const newConnection = new signalR.HubConnectionBuilder()
+        .withUrl(hubUrl, {
+          accessTokenFactory: async () => {
+            try {
+              const res = await fetch("/api/bff/ws-token");
+              if (res.ok) {
+                const data = await res.json();
+                return data.token || "";
+              }
+            } catch (err) {
+              console.error("WS Token fetch failed:", err);
             }
-          } catch (e) {
-            console.error("WS Token fetch failed:", e);
+            return "";
           }
-          return "";
-        }
-      })
-      .withAutomaticReconnect({
-        nextRetryDelayInMilliseconds: (retryContext) => {
-          // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
-          const delay = Math.min(1000 * Math.pow(2, retryContext.previousRetryCount), 30000);
-          console.log(`[SignalR Reconnect] Attempt #${retryContext.previousRetryCount + 1}. Delaying for ${delay}ms.`);
-          return delay;
-        }
-      })
-      .build();
+        })
+        .withAutomaticReconnect({
+          nextRetryDelayInMilliseconds: (retryContext) => {
+            // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
+            const delay = Math.min(1000 * Math.pow(2, retryContext.previousRetryCount), 30000);
+            console.log(`[SignalR Reconnect] Attempt #${retryContext.previousRetryCount + 1}. Delaying for ${delay}ms.`);
+            return delay;
+          }
+        })
+        .build();
 
-    // 1. Telemetry Data Listener
-    newConnection.on("ReceiveTelemetry", (data: any) => {
-      console.log("Telemetry received via SignalR:", data);
-      
-      const parsedLog: TelemetryLog = {
-        id: Math.random().toString(36).substr(2, 9),
-        deviceId: data.deviceId || "Bilinmiyor",
-        key: data.telemetryKey || "Metric",
-        value: Number(data.telemetryValue?.toFixed(2)) || 0,
-        timestamp: new Date(data.timestamp || Date.now()).toLocaleTimeString(),
-        raw: data
-      };
-
-      setLogs((prev) => [...prev.slice(-49), parsedLog]);
-
-      setDevices((prev) => {
-        const devKey = Object.keys(prev).find(
-          (k) => k === data.deviceId || prev[k].name.includes(data.deviceId) || prev[k].serialNumber === data.deviceId
-        ) || data.deviceId;
-
-        const currentDevice = prev[devKey] || {
-          id: data.deviceId,
-          name: data.deviceId,
-          serialNumber: data.deviceId,
-          tenantId: "",
-          lastTemp: 0,
-          lastPress: 0,
-          isOnline: true,
-          history: []
+      // 1. Telemetry Data Listener
+      newConnection.on("ReceiveTelemetry", (data: TelemetryPayload) => {
+        console.log("Telemetry received via SignalR:", data);
+        
+        const parsedLog: TelemetryLog = {
+          id: Math.random().toString(36).substr(2, 9),
+          deviceId: data.deviceId || "Bilinmiyor",
+          key: data.telemetryKey || "Metric",
+          value: Number(data.telemetryValue?.toFixed(2)) || 0,
+          timestamp: new Date(data.timestamp || Date.now()).toLocaleTimeString(),
+          raw: data
         };
 
-        const isTemp = data.telemetryKey === "temperature";
-        const val = Number(data.telemetryValue) || 0;
+        setLogs((prev) => [...prev.slice(-49), parsedLog]);
 
-        const updatedHistory = [
-          ...currentDevice.history,
-          {
-            temp: isTemp ? val : currentDevice.lastTemp,
-            press: !isTemp ? val : currentDevice.lastPress,
-            time: new Date().toLocaleTimeString().substr(3, 5)
-          }
-        ].slice(-15);
+        setDevices((prev) => {
+          const devKey = Object.keys(prev).find(
+            (k) => k === data.deviceId || (data.deviceId && prev[k].name.includes(data.deviceId)) || prev[k].serialNumber === data.deviceId
+          ) || data.deviceId || "";
 
-        return {
-          ...prev,
-          [devKey]: {
-            ...currentDevice,
-            lastTemp: isTemp ? val : currentDevice.lastTemp,
-            lastPress: !isTemp ? val : currentDevice.lastPress,
-            history: updatedHistory
-          }
-        };
-      });
-    });
+          const currentDevice = prev[devKey] || {
+            id: data.deviceId || "",
+            name: data.deviceId || "",
+            serialNumber: data.deviceId || "",
+            tenantId: "",
+            lastTemp: 0,
+            lastPress: 0,
+            isOnline: true,
+            history: []
+          };
 
-    // 2. Security Alerts Listener (SIEM integration) 🚨
-    newConnection.on("ReceiveSecurityAlert", (data: any) => {
-      console.warn("⚠️ Security Alert Received via SignalR:", data);
+          const isTemp = data.telemetryKey === "temperature";
+          const val = Number(data.telemetryValue) || 0;
 
-      const parsedAlert: SecurityAlert = {
-        id: Math.random().toString(36).substr(2, 9),
-        action: data.action || "Warning",
-        deviceSerialNumber: data.deviceSerialNumber || "UNKNOWN",
-        message: data.message || "Güvenlik İhlal Girişimi!",
-        timestamp: new Date().toLocaleTimeString()
-      };
+          const updatedHistory = [
+            ...currentDevice.history,
+            {
+              temp: isTemp ? val : currentDevice.lastTemp,
+              press: !isTemp ? val : currentDevice.lastPress,
+              time: new Date().toLocaleTimeString().substr(3, 5)
+            }
+          ].slice(-15);
 
-      setAlerts((prev) => [...prev.slice(-9), parsedAlert]);
-    });
-
-    // 3. Device Connection Status Listener 🔌
-    newConnection.on("ReceiveDeviceStatus", (data: any) => {
-      console.log("Device connection status updated:", data);
-
-      setDevices((prev) => {
-        const devKey = Object.keys(prev).find(
-          (k) => k === data.deviceSerialNumber
-        ) || data.deviceSerialNumber;
-
-        if (prev[devKey]) {
           return {
             ...prev,
             [devKey]: {
-              ...prev[devKey],
-              isOnline: data.isOnline
+              ...currentDevice,
+              lastTemp: isTemp ? val : currentDevice.lastTemp,
+              lastPress: !isTemp ? val : currentDevice.lastPress,
+              history: updatedHistory
             }
           };
-        }
-        return prev;
+        });
       });
-    });
 
-    // 4. Connection State Events for Auto-Reconnect
-    newConnection.onreconnecting((error) => {
-      console.warn("SignalR connection lost. Reconnecting...", error);
-      setHubStatus("Reconnecting");
-    });
+      // 2. Security Alerts Listener (SIEM integration) 🚨
+      newConnection.on("ReceiveSecurityAlert", (data: SecurityAlertPayload) => {
+        console.warn("⚠️ Security Alert Received via SignalR:", data);
 
-    newConnection.onreconnected((connectionId) => {
-      console.log("SignalR reconnected successfully!", connectionId);
-      setHubStatus("Connected");
-      setErrorMessage(null);
-    });
+        const parsedAlert: SecurityAlert = {
+          id: Math.random().toString(36).substr(2, 9),
+          action: data.action || "Warning",
+          deviceSerialNumber: data.deviceSerialNumber || "UNKNOWN",
+          message: data.message || "Güvenlik İhlal Girişimi!",
+          timestamp: new Date().toLocaleTimeString()
+        };
 
-    newConnection.onclose((error) => {
-      console.error("SignalR connection closed.", error);
-      setHubStatus("Disconnected");
-      if (error) {
-        setErrorMessage("Bağlantı kapandı. Lütfen sayfayı yenileyin.");
-      }
-    });
+        setAlerts((prev) => [...prev.slice(-9), parsedAlert]);
+      });
 
-    newConnection
-      .start()
-      .then(() => {
-        console.log("SignalR Connected Successfully!");
+      // 3. Device Connection Status Listener 🔌
+      newConnection.on("ReceiveDeviceStatus", (data: DeviceStatusPayload) => {
+        console.log("Device connection status updated:", data);
+
+        setDevices((prev) => {
+          const devKey = Object.keys(prev).find(
+            (k) => k === data.deviceSerialNumber
+          ) || data.deviceSerialNumber || "";
+
+          if (prev[devKey]) {
+            return {
+              ...prev,
+              [devKey]: {
+                ...prev[devKey],
+                isOnline: !!data.isOnline
+              }
+            };
+          }
+          return prev;
+        });
+      });
+
+      // 4. Connection State Events for Auto-Reconnect
+      newConnection.onreconnecting((err) => {
+        console.warn("SignalR connection lost. Reconnecting...", err);
+        setHubStatus("Reconnecting");
+      });
+
+      newConnection.onreconnected((connectionId) => {
+        console.log("SignalR reconnected successfully!", connectionId);
         setHubStatus("Connected");
         setErrorMessage(null);
-      })
-      .catch((err) => {
-        console.error("SignalR Connection Failed:", err);
-        setHubStatus("Error");
-        setErrorMessage(`Bağlantı Başarısız: API'nin çalışıp çalışmadığını (http://localhost:5294) kontrol edin.`);
       });
 
-    connectionRef.current = newConnection;
+      newConnection.onclose((err) => {
+        console.error("SignalR connection closed.", err);
+        setHubStatus("Disconnected");
+        if (err) {
+          setErrorMessage("Bağlantı kapandı. Lütfen sayfayı yenileyin.");
+        }
+      });
+
+      newConnection
+        .start()
+        .then(() => {
+          console.log("SignalR Connected Successfully!");
+          setHubStatus("Connected");
+          setErrorMessage(null);
+        })
+        .catch((err) => {
+          console.error("SignalR Connection Failed:", err);
+          setHubStatus("Error");
+          setErrorMessage(`Bağlantı Başarısız: API'nin çalışıp çalışmadığını (https://localhost:7122) kontrol edin.`);
+        });
+
+      activeConnection = newConnection;
+      connectionRef.current = newConnection;
+    };
+
+    connectToHub();
 
     return () => {
-      newConnection.stop();
+      if (activeConnection) {
+        activeConnection.stop();
+      }
     };
   }, [authChecked, user]);
 
@@ -368,7 +459,7 @@ export default function TelemetryDashboard() {
       if (!response.ok) {
         throw new Error(`Ingest HTTP error! status: ${response.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to ingest telemetry:", err);
       if (hubStatus !== "Connected") {
         simulateDirectTelemetry(devId, tempVal, pressVal);
@@ -396,7 +487,7 @@ export default function TelemetryDashboard() {
       if (!response.ok) {
         throw new Error(`Status HTTP error! status: ${response.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to send status update:", err);
       // Fallback
       if (hubStatus !== "Connected") {
@@ -431,8 +522,9 @@ export default function TelemetryDashboard() {
 
       const result = await response.json();
       setSeedLogs(JSON.stringify(result, null, 2));
-    } catch (err: any) {
-      setSeedLogs(`Seeding Hatası: ${err.message}. Backend API'nin 5294 portunda çalıştığından emin olun.`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setSeedLogs(`Seeding Hatası: ${errMsg}. Backend API'nin 7122 (HTTPS) portunda çalıştığından emin olun.`);
     } finally {
       setIsSeeding(false);
     }
@@ -484,6 +576,11 @@ export default function TelemetryDashboard() {
     });
   };
 
+  const handleSendTelemetryRef = useRef(handleSendTelemetry);
+  useEffect(() => {
+    handleSendTelemetryRef.current = handleSendTelemetry;
+  });
+
   // Auto-simulation interval loop
   useEffect(() => {
     if (!isAutoSim) return;
@@ -494,7 +591,7 @@ export default function TelemetryDashboard() {
         if (devices[dev.serialNumber]?.isOnline === false) return;
 
         let randTemp = 20 + Math.random() * 60; // 20 - 80
-        let randPress = 970 + Math.random() * 70; // 970 - 1040
+        const randPress = 970 + Math.random() * 70; // 970 - 1040
 
         if (dev.serialNumber === "SN-BTA1-WATER") {
           randTemp = 10 + Math.random() * 25;
@@ -504,7 +601,7 @@ export default function TelemetryDashboard() {
           randTemp = 15 + Math.random() * 50;
         }
 
-        handleSendTelemetry(dev.serialNumber, randTemp, randPress);
+        handleSendTelemetryRef.current(dev.serialNumber, randTemp, randPress);
       });
     }, 2500);
 
@@ -614,9 +711,16 @@ export default function TelemetryDashboard() {
             </button>
           </form>
 
-          <div className="pt-4 border-t border-slate-900 text-center">
+          <div className="pt-4 border-t border-slate-900 text-center flex flex-col gap-2.5">
+            <button
+              type="button"
+              onClick={() => window.location.href = "/register"}
+              className="text-xs text-teal-400 hover:text-teal-300 font-bold underline transition-colors cursor-pointer"
+            >
+              Şirket Kurucusu musunuz? Yeni Şirket Kaydı &rarr;
+            </button>
             <span className="text-[10px] text-slate-500 font-mono">
-              BFF Mode: Token'lar sunucu tarafında HttpOnly çerezlerde kilitlidir.
+              BFF Mode: Token&apos;lar sunucu tarafında HttpOnly çerezlerde kilitlidir.
             </span>
           </div>
         </div>
@@ -880,6 +984,128 @@ export default function TelemetryDashboard() {
             </div>
           )}
 
+          {/* Ekip & Davet Yönetimi Paneli 👥 (Sadece Tenant Owner ve Adminler için) */}
+          {user && user.roles && user.roles.some(r => r.toLowerCase() === "owner" || r.toLowerCase() === "admin") && (
+            <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-900/40 via-slate-900/30 to-teal-950/10 border border-slate-800/80 backdrop-blur-sm space-y-6 animate-fade-in">
+              
+              {/* Card Header */}
+              <div className="flex items-center gap-3 border-b border-slate-800/60 pb-4">
+                <div className="p-2 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-200">Ekip & Şirket Yetki Yönetimi</h3>
+                  <p className="text-xs text-slate-500 font-mono">Çalışanları ve sürücüleri şirketinize davet edin.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* Left Side: Tenant status details */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    Şirket Sistem Bağlamı (BFF)
+                  </h4>
+                  
+                  {tenantStatus ? (
+                    <div className="bg-slate-950/60 border border-slate-900 p-4 rounded-xl space-y-3 font-mono text-xs">
+                      <div>
+                        <span className="text-slate-500 block text-[10px] uppercase">Mevcut Şirket (Tenant)</span>
+                        <span className="text-slate-200 font-bold">{tenantStatus.tenantName}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px] uppercase">Şirket Kodu (Identifier)</span>
+                        <span className="text-teal-400 font-bold">@{tenantStatus.detectedTenant}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px] uppercase">Aktif Veritabanı Hattı</span>
+                        <span className="text-indigo-400 text-[10px] break-all block">{tenantStatus.activeConnectionString}</span>
+                      </div>
+                      <div className="pt-2 border-t border-slate-900 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-slate-500 text-[10px]">Tünel Modül Aktif</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-mono py-6">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400" />
+                      Sistem detayları sorgulanıyor...
+                    </div>
+                  )}
+
+                  <div className="text-[10px] text-slate-500 leading-relaxed bg-slate-950/20 p-3 rounded-xl border border-slate-900/50">
+                    <strong>Güvenlik Zinciri Uyarısı:</strong> Dışarıdan doğrudan kayıt kapalıdır. Alt kullanıcıların sisteme girebilmesi için e-posta daveti gönderilmeli, davet alan kullanıcılar <code>/accept-invite</code> üzerinden hesaplarını aktif etmelidir.
+                  </div>
+                </div>
+
+                {/* Right Side: Invite form */}
+                <div>
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
+                    Yeni Üyelik Daveti Gönder
+                  </h4>
+
+                  <form onSubmit={handleSendInvite} className="space-y-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">E-Posta Adresi</label>
+                      <input
+                        type="email"
+                        required
+                        value={inviteEmail}
+                        onChange={(e) => setInviteEmail(e.target.value)}
+                        placeholder="surucu@omnipulse.com"
+                        className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800/60 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-xs outline-none transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Kullanıcı Rolü</label>
+                      <select
+                        value={inviteRole}
+                        onChange={(e) => setInviteRole(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none"
+                      >
+                        <option value="Member">Member (Sürücü / Standart Çalışan)</option>
+                        <option value="Admin">Admin (Şirket Yöneticisi)</option>
+                        <option value="Owner">Owner (Şirket Kurucusu / Tam Yetki)</option>
+                      </select>
+                    </div>
+
+                    {inviteError && (
+                      <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-mono">
+                        {inviteError}
+                      </div>
+                    )}
+
+                    {inviteSuccess && (
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono">
+                        {inviteSuccess}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={inviteLoading}
+                      className="w-full py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs tracking-wide transition-all active:scale-98 disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      {inviteLoading ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          Davet Gönderiliyor...
+                        </>
+                      ) : (
+                        <>
+                          <UserPlus className="w-3.5 h-3.5" />
+                          Şirkete Davet Et
+                        </>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Interactive Pipeline & SIEM Simulator Panel */}
           {showSimulators && (
             <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-900/50 via-slate-900/30 to-indigo-950/20 border border-slate-800/80 backdrop-blur-sm">
@@ -1008,7 +1234,7 @@ export default function TelemetryDashboard() {
                     ) : (
                       <>
                         <Send className="w-4 h-4" />
-                        Kinesis'e Telemetri Pompala (POST)
+                        Kinesis&apos;e Telemetri Pompala (POST)
                       </>
                     )}
                   </button>

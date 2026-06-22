@@ -1,6 +1,10 @@
 import { cookies } from "next/headers";
 
-const BACKEND_URL = "http://localhost:5294";
+if (process.env.NODE_ENV === "development") {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
+const BACKEND_URL = "https://localhost:7122";
 
 export function parseJwt(token: string) {
   try {
@@ -13,7 +17,7 @@ export function parseJwt(token: string) {
         .join('')
     );
     return JSON.parse(jsonPayload);
-  } catch (e) {
+  } catch {
     return null;
   }
 }

@@ -22,7 +22,7 @@ export async function GET() {
       tenantIdentifier: payload.tenant_identifier,
       roles: payload["http://schemas.microsoft.com/ws/2008/06/identity/claims/role"] || payload.role || []
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("BFF User Route Error:", error);
     return NextResponse.json({ isAuthenticated: false, message: "Sunucu hatası" }, { status: 500 });
   }

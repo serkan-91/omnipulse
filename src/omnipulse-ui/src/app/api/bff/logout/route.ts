@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
-const BACKEND_URL = "http://localhost:5294";
+if (process.env.NODE_ENV === "development") {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
+const BACKEND_URL = "https://localhost:7122";
 
 export async function POST() {
   try {
@@ -28,7 +32,7 @@ export async function POST() {
     response.cookies.delete("op_refresh_token");
 
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("BFF Logout Error:", error);
     return NextResponse.json({
       isSuccess: false,

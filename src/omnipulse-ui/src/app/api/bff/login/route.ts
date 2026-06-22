@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
-const BACKEND_URL = "http://localhost:5294";
+if (process.env.NODE_ENV === "development") {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
+const BACKEND_URL = "https://localhost:7122";
 
 export async function POST(request: Request) {
   try {
@@ -48,7 +52,7 @@ export async function POST(request: Request) {
     }
 
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("BFF Login Error:", error);
     return NextResponse.json({
       isSuccess: false,
