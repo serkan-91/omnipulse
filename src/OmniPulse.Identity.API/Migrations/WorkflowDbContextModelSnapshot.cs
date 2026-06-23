@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using OmniPulse.Modules.WorkflowModule.Infrastructure.Persistence;
+using OmniPulse.Workflow.Infrastructure.Persistence;
 
 #nullable disable
 
@@ -22,7 +22,7 @@ namespace OmniPulse.Identity.API.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("OmniPulse.Modules.WorkflowModule.Domain.Entities.AssignmentPolicy", b =>
+            modelBuilder.Entity("OmniPulse.Workflow.Domain.Entities.AssignmentPolicy", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -71,7 +71,7 @@ namespace OmniPulse.Identity.API.Migrations
                     b.ToTable("AssignmentPolicies", (string)null);
                 });
 
-            modelBuilder.Entity("OmniPulse.Modules.WorkflowModule.Domain.Entities.WorkflowDefinition", b =>
+            modelBuilder.Entity("OmniPulse.Workflow.Domain.Entities.WorkflowDefinition", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -123,9 +123,9 @@ namespace OmniPulse.Identity.API.Migrations
                     b.ToTable("WorkflowDefinitions", (string)null);
                 });
 
-            modelBuilder.Entity("OmniPulse.Modules.WorkflowModule.Domain.Entities.AssignmentPolicy", b =>
+            modelBuilder.Entity("OmniPulse.Workflow.Domain.Entities.AssignmentPolicy", b =>
                 {
-                    b.HasOne("OmniPulse.Modules.WorkflowModule.Domain.Entities.WorkflowDefinition", "WorkflowDefinition")
+                    b.HasOne("OmniPulse.Workflow.Domain.Entities.WorkflowDefinition", "WorkflowDefinition")
                         .WithMany()
                         .HasForeignKey("WorkflowDefinitionId")
                         .OnDelete(DeleteBehavior.Restrict)

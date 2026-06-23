@@ -22,9 +22,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BuildingBlocks\OmniPulse.BuildingBlocks.csproj" />
-    <ProjectReference Include="..\Modules\TenantModule\TenantModule.csproj" />
-    <ProjectReference Include="..\Modules\IoTModule\IoTModule.csproj" />
-    <ProjectReference Include="..\Modules\WorkflowModule\WorkflowModule.csproj" />
+    <ProjectReference Include="..\OmniPulse.Tenant\OmniPulse.Tenant.csproj" />
+    <ProjectReference Include="..\OmniPulse.IoT\OmniPulse.IoT.csproj" />
+    <ProjectReference Include="..\OmniPulse.Workflow\OmniPulse.Workflow.csproj" />
   </ItemGroup>
 
 </Project>

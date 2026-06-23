@@ -2,14 +2,8 @@
   <Folder Name="/src/">
     <Project Path="src/OmniPulse.Identity.API/OmniPulse.Identity.API.csproj" />
     <Project Path="src/BuildingBlocks/OmniPulse.BuildingBlocks.csproj" />
-  </Folder>
-  <Folder Name="/src/Modules/IoTModule/">
-    <Project Path="src/Modules/IoTModule/IoTModule.csproj" />
-  </Folder>
-  <Folder Name="/src/Modules/TenantModule/">
-    <Project Path="src/Modules/TenantModule/TenantModule.csproj" />
-  </Folder>
-  <Folder Name="/src/Modules/WorkflowModule/">
-    <Project Path="src/Modules/WorkflowModule/WorkflowModule.csproj" />
+    <Project Path="src/OmniPulse.IoT/OmniPulse.IoT.csproj" />
+    <Project Path="src/OmniPulse.Tenant/OmniPulse.Tenant.csproj" />
+    <Project Path="src/OmniPulse.Workflow/OmniPulse.Workflow.csproj" />
   </Folder>
 </Solution>

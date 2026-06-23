@@ -41,7 +41,8 @@ public class UserTenantContext(IHttpContextAccessor httpContextAccessor) : IUser
             
             // Microsoft standartlarındaki 'tid' (Tenant ID) veya 'tenant_id' claim'ini okuruz
             var tenantIdStr = user?.FindFirst("tid")?.Value 
-                              ?? user?.FindFirst("tenant_id")?.Value;
+                              ?? user?.FindFirst("tenant_id")?.Value
+                              ?? user?.FindFirst("http://schemas.microsoft.com/identity/claims/tenantid")?.Value;
 
             if (Guid.TryParse(tenantIdStr, out var tenantId))
             {

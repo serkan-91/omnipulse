@@ -1,8 +1,8 @@
 using OmniPulse.Identity.API.Configuration;
 using OmniPulse.Identity.API.Infrastructure;
-using OmniPulse.Modules.TenantModule;
-using OmniPulse.Modules.IoTModule;
-using OmniPulse.Modules.WorkflowModule;
+using OmniPulse.Tenant;
+using OmniPulse.IoT;
+using OmniPulse.Workflow;
 using Scalar.AspNetCore; // Scalar mühürümüz!
 using OmniPulse.BuildingBlocks.Interfaces;
 using OmniPulse.Identity.API.Services;
@@ -101,9 +101,9 @@ builder.Services.AddOpenApi(options =>
         return Task.CompletedTask;
     });
 }); // .NET 10 yerleşik OpenAPI
-builder.Services.AddTenantModule(builder.Configuration); // DatabaseOptions'ı içeride kayıt eder
-builder.Services.AddIoTModule(builder.Configuration);
-builder.Services.AddWorkflowModule(builder.Configuration);
+builder.Services.AddTenant(builder.Configuration); // DatabaseOptions'ı içeride kayıt eder
+builder.Services.AddIoT(builder.Configuration);
+builder.Services.AddWorkflow(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMemoryCache();
 
@@ -196,7 +196,7 @@ app.MapIoTEndpoints();
 app.MapWorkflowEndpoints();
 
 // SignalR Hub'larını map'le 🚨
-app.MapHub<OmniPulse.Modules.IoTModule.Hubs.AlarmHub>("/hubs/alarms");
-app.MapHub<OmniPulse.Modules.WorkflowModule.Hubs.TelemetryHub>("/hubs/telemetry");
+app.MapHub<OmniPulse.IoT.Hubs.AlarmHub>("/hubs/alarms");
+app.MapHub<OmniPulse.Workflow.Hubs.TelemetryHub>("/hubs/telemetry");
 
 app.Run();

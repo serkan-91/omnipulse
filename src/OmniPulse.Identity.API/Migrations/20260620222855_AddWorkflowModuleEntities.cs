@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace OmniPulse.Identity.API.Migrations
 {
     /// <inheritdoc />
-    public partial class AddWorkflowModuleEntities : Migration
+    public partial class AddWorkflowEntities : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)

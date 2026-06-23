@@ -60,10 +60,14 @@ export default function LandingPage() {
       <div className="absolute bottom-10 left-10 w-[500px] h-[500px] bg-indigo-500/5 blur-[150px] pointer-events-none rounded-full" />
 
       {/* Navigation Header */}
-      <nav className="border-b border-slate-900 bg-slate-950/70 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+      <nav className="border-b border-slate-900 bg-slate-950/80 backdrop-blur-md fixed top-0 left-0 right-0 w-full z-50 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-gradient-to-tr from-teal-500 to-indigo-500 text-slate-950">
-            <Zap className="w-6 h-6" />
+          <div className="relative w-8 h-8 rounded-lg overflow-hidden border border-slate-800 bg-slate-950">
+            <img 
+              src="/logo.jpg" 
+              alt="OmniPulse Logo" 
+              className="w-full h-full object-cover scale-[1.7] translate-y-[-1px]" 
+            />
           </div>
           <div>
             <span className="text-lg font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
@@ -245,9 +249,9 @@ export default function LandingPage() {
               <div className="p-2.5 rounded-xl bg-teal-500/10 border border-teal-500/20 text-teal-400 w-fit">
                 <Layers className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-200">Çoklu Kiracılık (Multi-Tenancy)</h3>
+              <h3 className="text-base font-bold text-slate-200">Şirket Veri İzolasyonu</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                %100 izole edilmiş veritabanı bağlantılarıyla (BFF entegrasyonlu), şirketinizin verilerini diğer kiracılardan bağımsız olarak güvende tutar.
+                Şirketinizin tüm hassas verileri tamamen kendinize özel, izole edilmiş güvenli veri alanlarında saklanır; dışarıdan veya diğer kurumlardan erişilmesi imkansızdır.
               </p>
             </div>
 
@@ -255,9 +259,9 @@ export default function LandingPage() {
               <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 w-fit">
                 <ShieldAlert className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-200">SIEM Güvenlik Kalkanı</h3>
+              <h3 className="text-base font-bold text-slate-200">Akıllı Tehdit Algılama</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Sisteme kayıtlı olmayan veya pasif durumdaki cihazların telemetri sızdırma girişimlerini anında tespit edip SIEM alarmları üretir.
+                Sisteminize izinsiz bağlanmaya çalışan yabancı veya pasif durumdaki cihazları anında tespit eder ve yetkisiz erişimleri otomatik olarak engeller.
               </p>
             </div>
 
@@ -265,9 +269,9 @@ export default function LandingPage() {
               <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 w-fit">
                 <Activity className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-200">SignalR Canlı Akış</h3>
+              <h3 className="text-base font-bold text-slate-200">Kesintisiz Canlı İzleme</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Kinesis'ten beslenen telemetri kuyruğunu web-socket mimarisiyle tarayıcınıza milisaniyeler içerisinde, ekranı yenilemeden taşır.
+                Sensörlerinizden gelen tüm verileri sayfa yenilemeye veya beklemeye gerek kalmadan, milisaniyeler içerisinde anlık olarak ekranınıza yansıtır.
               </p>
             </div>
 
@@ -275,9 +279,9 @@ export default function LandingPage() {
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 w-fit">
                 <Cpu className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-200">Varlık Hiyerarşisi (Assets)</h3>
+              <h3 className="text-base font-bold text-slate-200">Esnek Varlık Yönetimi</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Lojistik, Fabrika gibi sektör fark etmeksizin; tırları, bantları veya tesisleri ağaç (Parent-Child) yapısında modellemenizi sağlar.
+                Lojistik, Fabrika veya Depo fark etmeksizin; tırlarınızı, üretim bantlarınızı veya tesislerinizi kolayca gruplandırıp şubeler halinde organize etmenizi sağlar.
               </p>
             </div>
           </div>
@@ -285,35 +289,108 @@ export default function LandingPage() {
       </section>
 
       {/* Architecture Pipeline Section */}
-      <section id="architecture" className="px-6 py-24 border-t border-slate-900 relative">
-        <div className="max-w-6xl mx-auto space-y-12">
+      <section id="architecture" className="px-6 py-24 border-t border-slate-900 relative overflow-hidden">
+        {/* Custom CSS for animated lines */}
+        <style dangerouslySetInnerHTML={{__html: `
+          @keyframes flowLine {
+            0% { stroke-dashoffset: 32; }
+            100% { stroke-dashoffset: 0; }
+          }
+          .animate-flow-line {
+            stroke-dasharray: 8 8;
+            animation: flowLine 1.5s linear infinite;
+          }
+        `}} />
+
+        <div className="max-w-6xl mx-auto space-y-16 relative z-10">
           <div className="text-center space-y-4 max-w-2xl mx-auto">
             <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-slate-100">
-              Veri Akışı ve Pipeline Mimarisi
+              Uçtan Uca Kesintisiz Veri Yolculuğu
             </h2>
             <p className="text-xs sm:text-sm text-slate-400">
-              Uçtan uca düşük gecikmeli, SIEM destekli ve veri tutarlılığı yüksek veri yolu (pipeline) altyapısı.
+              Makinelerinizdeki fiziksel hareketten, ekranınızdaki anlık grafiklere kadar uzanan güvenli ve ultra-hızlı veri köprüsü.
             </p>
           </div>
 
-          <div className="p-6 sm:p-8 rounded-3xl bg-slate-900/20 border border-slate-800/80 backdrop-blur-md">
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-center">
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-900 text-center font-mono text-xs">
-                <div className="text-teal-400 font-bold mb-1">Cihazlar / Uç Noktalar</div>
-                <span>IoT Sensörleri</span>
-              </div>
-              <div className="text-center text-slate-600 font-bold rotate-90 md:rotate-0">&rarr;</div>
-              
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-900 text-center font-mono text-xs">
-                <div className="text-indigo-400 font-bold mb-1">API & Outbox</div>
-                <span>C# .NET API & PostgreSQL</span>
-              </div>
-              <div className="text-center text-slate-600 font-bold rotate-90 md:rotate-0">&rarr;</div>
+          <div className="relative">
+            {/* Desktop Horizontal Connecting Flow Line */}
+            <div className="hidden lg:block absolute top-1/2 left-4 right-4 h-0.5 -translate-y-16 z-0">
+              <svg className="w-full h-4 overflow-visible">
+                <line 
+                  x1="10%" 
+                  y1="8" 
+                  x2="90%" 
+                  y2="8" 
+                  stroke="#14b8a6" 
+                  strokeWidth="2.5" 
+                  className="animate-flow-line opacity-30" 
+                />
+              </svg>
+            </div>
 
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-900 text-center font-mono text-xs col-span-1 md:col-span-1">
-                <div className="text-rose-400 font-bold mb-1">Akış (Kinesis / SIEM)</div>
-                <span>AWS Kinesis & Alarmlar</span>
+            {/* 4-Step Pipeline Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 relative z-10">
+              
+              {/* Step 1 */}
+              <div className="flex flex-col items-center text-center space-y-4 group animate-fade-in">
+                <div className="relative p-5 rounded-2xl bg-slate-950 border border-slate-800/80 shadow-xl group-hover:border-teal-500/50 transition-all duration-300">
+                  <div className="absolute inset-0 bg-teal-500/5 blur-xl rounded-full opacity-50 group-hover:opacity-100 transition-opacity animate-pulse" />
+                  <Cpu className="w-8 h-8 text-teal-400 relative z-10" />
+                </div>
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold text-teal-500 uppercase tracking-widest">Adım 1: Kaynak</span>
+                  <h3 className="text-sm font-bold text-slate-200">IoT Sensörleri</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed max-w-[220px]">
+                    Sıcaklık, titreşim ve basınç gibi fiziksel hareketleri uç noktalardan anlık olarak toplar.
+                  </p>
+                </div>
               </div>
+
+              {/* Step 2 */}
+              <div className="flex flex-col items-center text-center space-y-4 group">
+                <div className="relative p-5 rounded-2xl bg-slate-950 border border-slate-800/80 shadow-xl group-hover:border-indigo-500/50 transition-all duration-300">
+                  <div className="absolute inset-0 bg-indigo-500/5 blur-xl rounded-full opacity-50 group-hover:opacity-100 transition-opacity" />
+                  <Server className="w-8 h-8 text-indigo-400 relative z-10" />
+                </div>
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold text-indigo-400 uppercase tracking-widest">Adım 2: Güvenlik</span>
+                  <h3 className="text-sm font-bold text-slate-200">API ve Güvenlik Ağ Geçidi</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed max-w-[220px]">
+                    Verileri anında şifreler, kimlik kontrolü yapar ve yetkisiz kaçak cihaz sızmalarını engeller.
+                  </p>
+                </div>
+              </div>
+
+              {/* Step 3 */}
+              <div className="flex flex-col items-center text-center space-y-4 group">
+                <div className="relative p-5 rounded-2xl bg-slate-950 border border-slate-800/80 shadow-xl group-hover:border-amber-500/50 transition-all duration-300">
+                  <div className="absolute inset-0 bg-amber-500/5 blur-xl rounded-full opacity-50 group-hover:opacity-100 transition-opacity" />
+                  <Database className="w-8 h-8 text-amber-400 relative z-10" />
+                </div>
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold text-amber-500 uppercase tracking-widest">Adım 3: İşleme</span>
+                  <h3 className="text-sm font-bold text-slate-200">Veri Akış Motoru</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed max-w-[220px]">
+                    Yüksek hacimli verileri milisaniyeler içerisinde işler, analiz eder ve SIEM süzgecinden geçirir.
+                  </p>
+                </div>
+              </div>
+
+              {/* Step 4 */}
+              <div className="flex flex-col items-center text-center space-y-4 group">
+                <div className="relative p-5 rounded-2xl bg-slate-950 border border-slate-800/80 shadow-xl group-hover:border-emerald-500/50 transition-all duration-300">
+                  <div className="absolute inset-0 bg-emerald-500/5 blur-xl rounded-full opacity-50 group-hover:opacity-100 transition-opacity" />
+                  <Activity className="w-8 h-8 text-emerald-400 relative z-10 animate-bounce" />
+                </div>
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold text-emerald-500 uppercase tracking-widest">Adım 4: Görsel</span>
+                  <h3 className="text-sm font-bold text-slate-200">Canlı Dashboard</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed max-w-[220px]">
+                    Sayfayı bile yenilemenize gerek kalmadan, tüm durumları ve uyarıları anlık olarak ekranınıza yansıtır.
+                  </p>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>

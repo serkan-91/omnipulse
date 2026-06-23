@@ -19,8 +19,8 @@ docker compose up -d
 
 Veritabanı şemalarını güncellemek için:
 ```bash
-dotnet ef database update --project src/Modules/TenantModule/TenantModule.csproj --startup-project src/OmniPulse.Identity.API/OmniPulse.Identity.API.csproj --context IdentityDbContext
-dotnet ef database update --project src/Modules/IoTModule/IoTModule.csproj --startup-project src/OmniPulse.Identity.API/OmniPulse.Identity.API.csproj --context IoTDbContext
+dotnet ef database update --project src/OmniPulse.Tenant/OmniPulse.Tenant.csproj --startup-project src/OmniPulse.Identity.API/OmniPulse.Identity.API.csproj --context IdentityDbContext
+dotnet ef database update --project src/OmniPulse.IoT/OmniPulse.IoT.csproj --startup-project src/OmniPulse.Identity.API/OmniPulse.Identity.API.csproj --context IoTDbContext
 ```
 
 Backend API uygulamasını çalıştırmak için:

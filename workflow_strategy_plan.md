@@ -24,7 +24,7 @@ graph LR
 
 ## 2. Modüler Yapı: `WorkflowModule`
 
-Bu sistem, mimarinin bağımsızlığını ve modülerliğini korumak amacıyla `TenantModule` veya `IoTModule` içine gömülmek yerine `/src/Modules/WorkflowModule` altında **tamamen izole bir modül** olarak kurgulanacaktır.
+Bu sistem, mimarinin bağımsızlığını ve modülerliğini korumak amacıyla `TenantModule` veya `IoTModule` içine gömülmek yerine `/src/OmniPulse.Workflow` altında **tamamen izole bir modül** olarak kurgulanacaktır.
 
 ### Modül Sınırları ve İletişim
 

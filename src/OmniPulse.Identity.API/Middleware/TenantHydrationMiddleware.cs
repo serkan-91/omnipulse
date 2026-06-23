@@ -1,8 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using OmniPulse.BuildingBlocks.Interfaces;
-using OmniPulse.Modules.TenantModule.Features.Common.Interfaces;
-using OmniPulse.Modules.TenantModule.Infrastructure.Persistence;
+using OmniPulse.Tenant.Features.Common.Interfaces;
+using OmniPulse.Tenant.Infrastructure.Persistence;
 
 namespace OmniPulse.Identity.API.Middleware;
 

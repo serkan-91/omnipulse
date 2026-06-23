@@ -24,6 +24,16 @@ export async function POST(request: Request) {
       return NextResponse.json(data, { status: backendRes.status });
     }
 
+    // If the user belongs to multiple tenants and didn't specify one 👥
+    if (data.isSuccess && !data.token && data.availableTenants) {
+      return NextResponse.json({
+        isSuccess: false,
+        requiresTenantSelection: true,
+        availableTenants: data.availableTenants,
+        message: "Birden fazla şirkete kayıtlısınız. Lütfen devam etmek istediğiniz şirketi seçin."
+      });
+    }
+
     // Extract tokens from backend response
     const { token, refreshToken } = data;
 

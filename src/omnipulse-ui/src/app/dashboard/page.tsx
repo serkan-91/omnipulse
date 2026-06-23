@@ -105,6 +105,15 @@ export default function TelemetryDashboard() {
 
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
+  
+  // Alarm thresholds for each device serial number 🚨
+  const [thresholds, setThresholds] = useState<Record<string, number>>({
+    "SN-AUPANDA-TEMP": 10.0,
+    "SN-BTA1-WATER": 75.0,
+    "SN-BTA1-VIB": 90.0,
+    "SN-BTB1-OIL": 45.0
+  });
+
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const connectionRef = useRef<signalR.HubConnection | null>(null);
 
@@ -117,6 +126,8 @@ export default function TelemetryDashboard() {
   const [loginTenant, setLoginTenant] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [pastTenants, setPastTenants] = useState<string[]>([]);
+  const [availableTenantsForSelection, setAvailableTenantsForSelection] = useState<{ id: string; name: string; identifier: string }[] | null>(null);
 
   // Tenant Status & Invite states 👥
   const [tenantStatus, setTenantStatus] = useState<{ message: string; detectedTenant: string; tenantName: string; activeConnectionString: string } | null>(null);
@@ -177,6 +188,34 @@ export default function TelemetryDashboard() {
       }
     }
   }, []);
+
+  // Load last tenant and past tenants list from localStorage (scoped to the entered email for privacy) 🔒
+  useEffect(() => {
+    setAvailableTenantsForSelection(null); // Reset multiple tenant selection form when email changes
+    if (typeof window !== "undefined") {
+      const emailCleaned = loginEmail.trim().toLowerCase();
+      if (emailCleaned) {
+        try {
+          const emailKey = btoa(emailCleaned);
+          const lastTenant = localStorage.getItem(`omnipulse_last_tenant_${emailKey}`);
+          setLoginTenant(lastTenant || "");
+          
+          const stored = localStorage.getItem(`omnipulse_tenants_${emailKey}`);
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed)) {
+              setPastTenants(parsed);
+              return;
+            }
+          }
+        } catch (e) {
+          console.error("Failed to parse email-scoped past tenants:", e);
+        }
+      }
+      setPastTenants([]);
+      setLoginTenant("");
+    }
+  }, [loginEmail]);
 
   // Fetch tenant status when user changes
   useEffect(() => {
@@ -268,6 +307,21 @@ export default function TelemetryDashboard() {
     e.preventDefault();
     setIsLoggingIn(true);
     setLoginError(null);
+
+    // Resolve target tenant from input state, falling back to email-scoped last tenant in localStorage 🔒
+    let targetTenant = loginTenant ? loginTenant.trim().toLowerCase() : undefined;
+    if (!targetTenant && typeof window !== "undefined" && loginEmail) {
+      try {
+        const emailKey = btoa(loginEmail.trim().toLowerCase());
+        const savedLastTenant = localStorage.getItem(`omnipulse_last_tenant_${emailKey}`);
+        if (savedLastTenant) {
+          targetTenant = savedLastTenant;
+        }
+      } catch (err) {
+        console.error("Failed to resolve last tenant from storage:", err);
+      }
+    }
+
     try {
       const res = await fetch("/api/bff/login", {
         method: "POST",
@@ -275,12 +329,18 @@ export default function TelemetryDashboard() {
         body: JSON.stringify({
           email: loginEmail,
           password: loginPassword,
-          tenantIdentifier: loginTenant || undefined
+          tenantIdentifier: targetTenant || undefined
         })
       });
 
       const data = await res.json();
       if (!res.ok || !data.isSuccess) {
+        if (data.requiresTenantSelection) {
+          setAvailableTenantsForSelection(data.availableTenants);
+          setLoginTenant(data.availableTenants[0].identifier);
+          setIsLoggingIn(false);
+          return;
+        }
         throw new Error(data.message || "E-posta veya şifre hatalı.");
       }
 
@@ -295,6 +355,30 @@ export default function TelemetryDashboard() {
           tenantIdentifier: userData.tenantIdentifier,
           roles: normalizedRoles
         });
+        setAvailableTenantsForSelection(null);
+
+        // Save successful login tenant to localStorage (scoped to email) 🔒
+        const activeTenant = loginTenant || targetTenant;
+        if (typeof window !== "undefined" && activeTenant && loginEmail) {
+          const cleanedTenant = activeTenant.trim().toLowerCase();
+          const emailKey = btoa(loginEmail.trim().toLowerCase());
+          
+          localStorage.setItem(`omnipulse_last_tenant_${emailKey}`, cleanedTenant);
+          
+          const existing = localStorage.getItem(`omnipulse_tenants_${emailKey}`);
+          let list: string[] = [];
+          if (existing) {
+            try {
+              const parsed = JSON.parse(existing);
+              if (Array.isArray(parsed)) list = parsed;
+            } catch {}
+          }
+          if (!list.includes(cleanedTenant)) {
+            list.push(cleanedTenant);
+            localStorage.setItem(`omnipulse_tenants_${emailKey}`, JSON.stringify(list));
+            setPastTenants(list);
+          }
+        }
       }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : "Giriş hatası oluştu.";
@@ -530,6 +614,10 @@ export default function TelemetryDashboard() {
 
   // Send Telemetry HTTP Post
   const handleSendTelemetry = async (devId: string, tempVal: number, pressVal: number) => {
+    if (!user) {
+      simulateDirectTelemetry(devId, tempVal, pressVal);
+      return;
+    }
     setIsSending(true);
     try {
       const response = await fetch("/api/bff/proxy/api/iot/telemetry", {
@@ -560,6 +648,21 @@ export default function TelemetryDashboard() {
 
   // Send Connection Status Change POST
   const handleSendConnectionStatus = async (devId: string, isOnline: boolean) => {
+    if (!user) {
+      setDevices((prev) => {
+        if (prev[devId]) {
+          return {
+            ...prev,
+            [devId]: {
+              ...prev[devId],
+              isOnline: isOnline
+            }
+          };
+        }
+        return prev;
+      });
+      return;
+    }
     try {
       const response = await fetch("/api/bff/proxy/api/iot/devices/status", {
         method: "POST",
@@ -690,6 +793,37 @@ export default function TelemetryDashboard() {
 
       setLogs((prev) => [...prev.slice(-49), parsedLog]);
 
+      // Check threshold limits and trigger SIEM alerts if exceeded or resolved 🚨
+      if (evt.key === "temperature") {
+        const limit = thresholds[devId];
+        if (limit !== undefined) {
+          const prevDev = devices[devId];
+          const prevTemp = prevDev ? prevDev.lastTemp : 25;
+          const wasCritical = prevTemp > limit;
+          const isCriticalNow = evt.val > limit;
+
+          if (!wasCritical && isCriticalNow) {
+            const parsedAlert: SecurityAlert = {
+              id: Math.random().toString(36).substr(2, 9),
+              action: "LIMIT_BREACH",
+              deviceSerialNumber: devId,
+              message: `Kritik Limit Aşımı! Sıcaklık/Değer: ${evt.val.toFixed(1)} (Eşik: ${limit.toFixed(1)})`,
+              timestamp: new Date().toLocaleTimeString()
+            };
+            setAlerts((prev) => [...prev, parsedAlert].slice(-3));
+          } else if (wasCritical && !isCriticalNow) {
+            const parsedAlert: SecurityAlert = {
+              id: Math.random().toString(36).substr(2, 9),
+              action: "LIMIT_RESOLVED",
+              deviceSerialNumber: devId,
+              message: `Normal Sınırlara Döndü. Sıcaklık/Değer: ${evt.val.toFixed(1)} (Eşik: ${limit.toFixed(1)})`,
+              timestamp: new Date().toLocaleTimeString()
+            };
+            setAlerts((prev) => [...prev, parsedAlert].slice(-3));
+          }
+        }
+      }
+
       setDevices((prev) => {
         const currentDevice = prev[devId];
         const isTemp = evt.key === "temperature";
@@ -795,8 +929,12 @@ export default function TelemetryDashboard() {
         {/* Glassmorphic Card */}
         <div className="z-10 w-full max-w-md p-8 rounded-3xl bg-slate-900/40 border border-slate-800/80 backdrop-blur-xl shadow-2xl space-y-6">
           <div className="flex flex-col items-center space-y-2">
-            <div className="p-3 rounded-2xl bg-gradient-to-tr from-teal-500 to-indigo-500 text-slate-950 shadow-lg">
-              <Zap className="w-8 h-8 animate-pulse" />
+            <div className="relative w-16 h-16 rounded-2xl overflow-hidden border border-slate-800 shadow-lg bg-slate-950">
+              <img 
+                src="/logo.jpg" 
+                alt="OmniPulse Logo" 
+                className="w-full h-full object-cover scale-[1.7] translate-y-[-2px]" 
+              />
             </div>
             <h1 className="text-2xl font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">
               OMNIPULSE BFF PORTAL
@@ -831,16 +969,67 @@ export default function TelemetryDashboard() {
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Şirket Kodu (Tenant - Opsiyonel)</label>
-              <input
-                type="text"
-                value={loginTenant}
-                onChange={(e) => setLoginTenant(e.target.value)}
-                placeholder="Örn: pandaberry"
-                className="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-slate-800/60 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-sm outline-none transition-all"
-              />
-            </div>
+            {availableTenantsForSelection ? (
+              <div>
+                <label className="block text-xs font-bold text-teal-400 uppercase tracking-wide mb-1 flex items-center gap-1.5 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                  Giriş Yapılacak Şirketi Seçin
+                </label>
+                <select
+                  value={loginTenant}
+                  onChange={(e) => setLoginTenant(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-teal-500/50 focus:border-teal-400 focus:ring-1 focus:ring-teal-500 text-sm outline-none transition-all text-slate-100 cursor-pointer"
+                >
+                  {availableTenantsForSelection.map((t) => (
+                    <option key={t.id} value={t.identifier}>
+                      {t.name} (@{t.identifier})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 mt-1.5 font-mono">
+                  E-postanız birden fazla şirkete bağlıdır.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Şirket Kodu (Tenant - Opsiyonel)</label>
+                <input
+                  type="text"
+                  list="past-tenants-list"
+                  value={loginTenant}
+                  onChange={(e) => setLoginTenant(e.target.value)}
+                  placeholder="Örn: pandaberry"
+                  className="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-slate-800/60 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-sm outline-none transition-all"
+                  autoComplete="off"
+                />
+                <datalist id="past-tenants-list">
+                  {pastTenants.map((t) => (
+                    <option key={t} value={t} />
+                  ))}
+                </datalist>
+
+                {/* Clickable Quick History Pills under the input */}
+                {pastTenants.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+                    <span className="text-[10px] text-slate-500 font-mono">Geçmiş:</span>
+                    {pastTenants.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setLoginTenant(t)}
+                        className={`px-2.5 py-0.5 rounded-lg text-[10px] font-mono transition-all border cursor-pointer ${
+                          loginTenant.trim().toLowerCase() === t.trim().toLowerCase()
+                            ? "bg-teal-500/10 border-teal-500/30 text-teal-400 font-bold"
+                            : "bg-slate-950/40 border-slate-900 text-slate-500 hover:text-slate-300 hover:border-slate-800"
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {loginError && (
               <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-mono">
@@ -891,8 +1080,12 @@ export default function TelemetryDashboard() {
       {/* Header */}
       <header className="z-10 border-b border-slate-900 bg-slate-950/80 backdrop-blur-md sticky top-0 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-gradient-to-tr from-teal-500 to-indigo-500 text-slate-950">
-            <Zap className="w-6 h-6 animate-pulse" />
+          <div className="relative w-8 h-8 rounded-lg overflow-hidden border border-slate-800 bg-slate-950">
+            <img 
+              src="/logo.jpg" 
+              alt="OmniPulse Logo" 
+              className="w-full h-full object-cover scale-[1.7] translate-y-[-1px]" 
+            />
           </div>
           <div>
             <h1 className="text-xl font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">
@@ -911,52 +1104,48 @@ export default function TelemetryDashboard() {
             </span>
           </div>
 
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-mono transition-all ${
-            hubStatus === "Connected"
-              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-              : hubStatus === "Connecting"
-              ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
-              : "bg-rose-500/10 border-rose-500/30 text-rose-400"
-          }`}>
-            <span className={`w-2.5 h-2.5 rounded-full ${
+          {!user ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-teal-500/30 bg-teal-500/10 text-teal-400 text-xs font-mono">
+              <span className="w-2.5 h-2.5 rounded-full bg-teal-400 animate-pulse" />
+              Sistem: Sandbox Modu
+            </div>
+          ) : (
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-mono transition-all ${
               hubStatus === "Connected"
-                ? "bg-emerald-500 animate-ping"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
                 : hubStatus === "Connecting"
-                ? "bg-amber-500 animate-pulse"
-                : "bg-rose-500"
-            }`} />
-            WS Gateway: {hubStatus}
-          </div>
+                ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                : "bg-rose-500/10 border-rose-500/30 text-rose-400"
+            }`}>
+              <span className={`w-2.5 h-2.5 rounded-full ${
+                hubStatus === "Connected"
+                  ? "bg-emerald-500 animate-ping"
+                  : hubStatus === "Connecting"
+                  ? "bg-amber-500 animate-pulse"
+                  : "bg-rose-500"
+              }`} />
+              WS Gateway: {hubStatus}
+            </div>
+          )}
 
-          {showSimulators && (
-            user ? (
-              userDevicesList.length > 0 ? (
-                <button
-                  onClick={handleCleanupIoTDemo}
-                  disabled={isDemoCleaning}
-                  className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  {isDemoCleaning ? "Temizleniyor..." : "Demo Verileri Temizle (Reset)"}
-                </button>
-              ) : (
-                <button
-                  onClick={handleSeedIoTDemo}
-                  disabled={isDemoSeeding}
-                  className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  {isDemoSeeding ? "Yükleniyor..." : "Demo Sensörleri Yükle"}
-                </button>
-              )
-            ) : (
+          {showSimulators && user && (
+            userDevicesList.length > 0 ? (
               <button
-                onClick={handleSeedDemo}
-                disabled={isSeeding}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+                onClick={handleCleanupIoTDemo}
+                disabled={isDemoCleaning}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
               >
                 <Database className="w-3.5 h-3.5" />
-                {isSeeding ? "Kuruluyor..." : "Demo Kurulumu (Seed)"}
+                {isDemoCleaning ? "Temizleniyor..." : "Demo Verileri Temizle (Reset)"}
+              </button>
+            ) : (
+              <button
+                onClick={handleSeedIoTDemo}
+                disabled={isDemoSeeding}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+              >
+                <Database className="w-3.5 h-3.5" />
+                {isDemoSeeding ? "Yükleniyor..." : "Demo Sensörleri Yükle"}
               </button>
             )
           )}
@@ -979,8 +1168,8 @@ export default function TelemetryDashboard() {
         </div>
       </header>
 
-      {/* SignalR Connection Status Banners */}
-      {hubStatus === "Reconnecting" && (
+      {/* SignalR Connection Status Banners (Only displayed for real authenticated tenants) */}
+      {user && hubStatus === "Reconnecting" && (
         <div className="z-20 bg-amber-500/15 border-b border-amber-500/30 text-amber-300 px-6 py-3 flex items-center gap-3 animate-pulse">
           <RefreshCw className="w-4.5 h-4.5 text-amber-400 animate-spin" />
           <div className="flex-1">
@@ -990,7 +1179,7 @@ export default function TelemetryDashboard() {
         </div>
       )}
 
-      {hubStatus === "Disconnected" && (
+      {user && hubStatus === "Disconnected" && (
         <div className="z-20 bg-rose-500/15 border-b border-rose-500/30 text-rose-300 px-6 py-3 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <WifiOff className="w-4.5 h-4.5 text-rose-400" />
@@ -1009,7 +1198,7 @@ export default function TelemetryDashboard() {
         </div>
       )}
 
-      {hubStatus === "Error" && (
+      {user && hubStatus === "Error" && (
         <div className="z-20 bg-rose-500/15 border-b border-rose-500/30 text-rose-300 px-6 py-3 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <AlertTriangle className="w-4.5 h-4.5 text-rose-400" />
@@ -1030,23 +1219,41 @@ export default function TelemetryDashboard() {
 
       {/* Flashing SIEM Security Alerts Panel */}
       {alerts.length > 0 && (
-        <div className="mx-6 mt-6 p-4 rounded-xl bg-rose-950/20 border border-rose-500/30 backdrop-blur-sm animate-pulse z-10">
-          <div className="flex items-center gap-2 text-rose-400 font-black text-sm mb-2 uppercase tracking-wider">
-            <ShieldAlert className="w-5 h-5 text-rose-500" />
-            SIEM Uyarısı: Güvenlik İhlal Girişimi Saptandı! 🚨
+        <div className={`mx-6 mt-6 p-4 rounded-xl border backdrop-blur-sm transition-all duration-300 z-10 ${
+          alerts.some(a => a.action !== "LIMIT_RESOLVED") 
+            ? "bg-rose-950/20 border-rose-500/30 animate-pulse" 
+            : "bg-emerald-950/15 border-emerald-500/20"
+        }`}>
+          <div className={`flex items-center gap-2 font-black text-sm mb-2 uppercase tracking-wider ${
+            alerts.some(a => a.action !== "LIMIT_RESOLVED") ? "text-rose-400" : "text-emerald-400"
+          }`}>
+            <ShieldAlert className={`w-5 h-5 ${alerts.some(a => a.action !== "LIMIT_RESOLVED") ? "text-rose-500" : "text-emerald-500"}`} />
+            {alerts.some(a => a.action !== "LIMIT_RESOLVED") 
+              ? "SIEM IoT Alarm Hattı: Kritik Limit Aşımı Saptandı! 🚨" 
+              : "SIEM IoT Alarm Hattı: Tüm Sistemler Güvenli / Normal Durumda ✅"}
           </div>
           <div className="max-h-[100px] overflow-y-auto space-y-1.5 pr-2">
-            {alerts.map((alert) => (
-              <div key={alert.id} className="text-xs text-rose-300 font-mono flex items-start gap-2">
-                <span className="text-rose-500">[{alert.timestamp}]</span>
-                <span><strong>{alert.deviceSerialNumber}</strong>: {alert.message} ({alert.action})</span>
-              </div>
-            ))}
+            {alerts.map((alert) => {
+              const isResolved = alert.action === "LIMIT_RESOLVED";
+              return (
+                <div key={alert.id} className={`text-xs font-mono flex items-start gap-2 ${isResolved ? "text-emerald-400" : "text-rose-300"}`}>
+                  <span className={isResolved ? "text-emerald-500/80" : "text-rose-500/80"}>[{alert.timestamp}]</span>
+                  <span>
+                    <strong>{alert.deviceSerialNumber}</strong>: {alert.message}
+                    <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${isResolved ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"}`}>
+                      {isResolved ? "DÜZELDİ" : "KRİTİK"}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
           </div>
           <div className="mt-3 flex justify-end">
             <button
               onClick={() => setAlerts([])}
-              className="text-[10px] text-rose-400 hover:text-rose-200 font-bold uppercase underline cursor-pointer"
+              className={`text-[10px] font-bold uppercase underline cursor-pointer transition-colors ${
+                alerts.some(a => a.action !== "LIMIT_RESOLVED") ? "text-rose-400 hover:text-rose-200" : "text-emerald-400 hover:text-emerald-200"
+              }`}
             >
               Uyarılardan Çık / Temizle
             </button>
@@ -1076,8 +1283,7 @@ export default function TelemetryDashboard() {
                     OmniPulse platformunu kendi kiracınız (şirketiniz) altında test etmek için örnek IoT sensörleri, hiyerarşik varlıklar (Assets) ve canlı geçmiş telemetri verilerini içeren demo veri setini anında kurabilirsiniz.
                   </p>
                 </div>
-                
-                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+        <div className="flex flex-col sm:flex-row gap-3 pt-2">
                   <button
                     onClick={handleSeedIoTDemo}
                     disabled={isDemoSeeding}
@@ -1098,12 +1304,16 @@ export default function TelemetryDashboard() {
             ) : (user ? userDevicesList : SEED_DEVICES).map((dev) => {
               const devData = devices[dev.serialNumber] || { lastTemp: 25, lastPress: 1000, isOnline: true, history: [] };
               const history = devData.history || [];
+              const thresholdVal = thresholds[dev.serialNumber] ?? 99999;
+              const isCritical = devData.isOnline && devData.lastTemp > thresholdVal;
 
               return (
                 <div key={dev.serialNumber} className={`relative p-5 rounded-2xl bg-slate-900/40 border transition-all backdrop-blur-sm group overflow-hidden ${
-                  devData.isOnline 
-                    ? "border-slate-800/80 hover:border-slate-700/80" 
-                    : "border-slate-950 bg-slate-950/20 opacity-60"
+                  !devData.isOnline 
+                    ? "border-slate-950 bg-slate-950/20 opacity-60" 
+                    : isCritical
+                    ? "border-rose-500/60 shadow-[0_0_15px_rgba(244,63,94,0.15)] bg-rose-950/5 animate-pulse"
+                    : "border-slate-800/80 hover:border-slate-700/80"
                 }`}>
                   {/* Decorative corner indicator */}
                   <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-teal-500/5 to-transparent rounded-bl-full pointer-events-none" />
@@ -1111,18 +1321,23 @@ export default function TelemetryDashboard() {
                   <div className="flex items-start justify-between">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className={`w-2.5 h-2.5 rounded-full ${devData.isOnline ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" : "bg-slate-700"}`} />
+                        <span className={`w-2.5 h-2.5 rounded-full ${devData.isOnline ? (isCritical ? "bg-rose-500 animate-ping" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]") : "bg-slate-700"}`} />
                         <div className="text-xs font-mono text-slate-500 tracking-wider uppercase">{dev.serialNumber}</div>
+                        {isCritical && (
+                          <span className="px-1.5 py-0.5 text-[8px] font-bold bg-rose-500/20 border border-rose-500/40 text-rose-400 rounded animate-bounce">
+                            LİMİT AŞILDI! 🚨
+                          </span>
+                        )}
                       </div>
                       <h3 className="text-base font-bold text-slate-200 group-hover:text-teal-400 transition-colors mt-0.5">{dev.name}</h3>
                     </div>
-                    <div className="p-2 rounded-lg bg-slate-950 border border-slate-800/50">
+                    <div className={`p-2 rounded-lg bg-slate-950 border transition-colors ${isCritical ? "border-rose-500/40 animate-pulse" : "border-slate-800/50"}`}>
                       {dev.serialNumber.toLowerCase().includes("water") ? (
-                        <Droplet className="w-5 h-5 text-sky-400" />
+                        <Droplet className={`w-5 h-5 ${isCritical ? "text-rose-400" : "text-sky-400"}`} />
                       ) : dev.serialNumber.toLowerCase().includes("temp") ? (
-                        <Flame className="w-5 h-5 text-amber-500" />
+                        <Flame className={`w-5 h-5 ${isCritical ? "text-rose-500 animate-bounce" : "text-amber-500"}`} />
                       ) : dev.serialNumber.toLowerCase().includes("vib") ? (
-                        <Activity className="w-5 h-5 text-emerald-400" />
+                        <Activity className={`w-5 h-5 ${isCritical ? "text-rose-400" : "text-emerald-400"}`} />
                       ) : (
                         <Settings className="w-5 h-5 text-purple-400" />
                       )}
@@ -1130,9 +1345,9 @@ export default function TelemetryDashboard() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-4 mt-6">
-                    <div className="bg-slate-950/60 border border-slate-900 p-3 rounded-xl">
+                    <div className={`bg-slate-950/60 border p-3 rounded-xl transition-all ${isCritical ? "border-rose-500/20 bg-rose-950/10" : "border-slate-900"}`}>
                       <div className="text-[10px] font-mono text-slate-500">Gelen Değer</div>
-                      <div className="text-xl font-black text-slate-100 font-mono mt-1 flex items-baseline gap-1">
+                      <div className={`text-xl font-black font-mono mt-1 flex items-baseline gap-1 ${isCritical ? "text-rose-400" : "text-slate-100"}`}>
                         {devData.isOnline ? devData.lastTemp.toFixed(1) : "---"}
                         <span className="text-xs font-normal text-slate-400">{devData.isOnline ? dev.unit : ""}</span>
                       </div>
@@ -1150,14 +1365,14 @@ export default function TelemetryDashboard() {
                   <div className="mt-5 h-16 w-full relative bg-slate-950/30 rounded-xl overflow-hidden border border-slate-900/50">
                     {!devData.isOnline ? (
                       <div className="absolute inset-0 flex items-center justify-center text-[10px] font-mono text-rose-500/80 bg-rose-950/5">
-                        <WifiOff className="w-4 h-4 mr-1.5" /> Cihaz Çevrimdışı (OFFLINE)
+                        <WifiOff className="w-4.5 h-4.5 mr-1.5" /> Cihaz Çevrimdışı (OFFLINE)
                       </div>
                     ) : history.length > 1 ? (
                       <svg className="w-full h-full" viewBox="0 0 200 60" preserveAspectRatio="none">
                         <defs>
                           <linearGradient id={`grad-${dev.serialNumber}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#2dd4bf" stopOpacity="0.25" />
-                            <stop offset="100%" stopColor="#2dd4bf" stopOpacity="0" />
+                            <stop offset="0%" stopColor={isCritical ? "#f43f5e" : "#2dd4bf"} stopOpacity="0.25" />
+                            <stop offset="100%" stopColor={isCritical ? "#f43f5e" : "#2dd4bf"} stopOpacity="0" />
                           </linearGradient>
                         </defs>
                         <path
@@ -1167,7 +1382,7 @@ export default function TelemetryDashboard() {
                         <path
                           d={generateSvgPath(history, "temp", 200, 60)}
                           fill="none"
-                          stroke="#2dd4bf"
+                          stroke={isCritical ? "#f43f5e" : "#2dd4bf"}
                           strokeWidth="2"
                           strokeLinecap="round"
                         />
@@ -1177,6 +1392,30 @@ export default function TelemetryDashboard() {
                         Canlı veri akışı bekleniyor...
                       </div>
                     )}
+                  </div>
+
+                  {/* Interactive Threshold Slider for Demo */}
+                  <div className="mt-4 pt-3 border-t border-slate-900/60 flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-slate-500 flex items-center gap-1">
+                      <Settings className="w-3.5 h-3.5 text-slate-500" />
+                      Alarm Limiti:
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={dev.serialNumber.toLowerCase().includes("temp") ? "0" : dev.serialNumber.toLowerCase().includes("water") ? "0" : "0"}
+                        max={dev.serialNumber.toLowerCase().includes("temp") ? "120" : dev.serialNumber.toLowerCase().includes("water") ? "150" : "150"}
+                        value={thresholds[dev.serialNumber] ?? 50}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setThresholds(prev => ({ ...prev, [dev.serialNumber]: val }));
+                        }}
+                        className="w-20 accent-teal-400 bg-slate-800 rounded-lg appearance-none h-1 cursor-pointer"
+                      />
+                      <span className={`font-bold transition-colors ${isCritical ? "text-rose-400" : "text-teal-400"}`}>
+                        {thresholds[dev.serialNumber] ?? 50} {dev.unit}
+                      </span>
+                    </div>
                   </div>
                 </div>
               );
@@ -1454,7 +1693,7 @@ export default function TelemetryDashboard() {
                     ) : (
                       <>
                         <Send className="w-4 h-4" />
-                        Kinesis&apos;e Telemetri Pompala (POST)
+                        {user ? "Kinesis'e Telemetri Pompala (POST)" : "Simülasyon Telemetrisi Gönder (Lokal)"}
                       </>
                     )}
                   </button>
@@ -1465,7 +1704,7 @@ export default function TelemetryDashboard() {
         </div>
 
         {/* Right Column: WebSocket Live Terminal Log */}
-        <div className="flex flex-col rounded-2xl bg-slate-900/30 border border-slate-800/80 backdrop-blur-sm overflow-hidden h-[600px] xl:h-auto">
+        <div className="flex flex-col rounded-2xl bg-slate-900/30 border border-slate-800/80 backdrop-blur-sm overflow-hidden h-[620px] xl:h-[calc(100vh-105px)] xl:max-h-[860px] xl:sticky xl:top-[90px] xl:self-start">
           {/* Terminal Header */}
           <div className="p-4 bg-slate-950 border-b border-slate-900 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1481,7 +1720,7 @@ export default function TelemetryDashboard() {
           </div>
 
           {/* Terminal Body */}
-          <div className="flex-1 bg-slate-950/80 p-4 font-mono text-xs overflow-y-auto space-y-2.5 max-h-[500px] xl:max-h-none scrollbar-thin scrollbar-thumb-slate-800">
+          <div className="flex-1 bg-slate-950/80 p-4 font-mono text-xs overflow-y-auto space-y-2.5 scrollbar-thin scrollbar-thumb-slate-800">
             {logs.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-slate-600 text-center p-6">
                 <Wifi className="w-8 h-8 text-slate-700 mb-2 animate-bounce" />

@@ -38,14 +38,14 @@ graph TD
 
 Cihazlardan gelen ham verilerin doğrulanması, PostgreSQL veritabanına mühürlenmesi ve ardından AWS Kinesis'e aktarılması sürecidir.
 
-* **İlgili Sınıf**: [KinesisTelemetryPublisher](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/Modules/IoTModule/Infrastructure/Streaming/KinesisTelemetryPublisher.cs)
-* **İşleyici Sınıf**: [IngestTelemetryCommandHandler](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/Modules/IoTModule/Features/Telemetry/IngestTelemetry/IngestTelemetryCommandHandler.cs)
+* **İlgili Sınıf**: [KinesisTelemetryPublisher](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/OmniPulse.IoT/Infrastructure/Streaming/KinesisTelemetryPublisher.cs)
+* **İşleyici Sınıf**: [IngestTelemetryCommandHandler](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/OmniPulse.IoT/Features/Telemetry/IngestTelemetry/IngestTelemetryCommandHandler.cs)
 
 ### ⚙️ Çalışma Mantığı
 1. Cihazdan gelen istek `IngestTelemetryCommand` ile karşılanır.
 2. Seri numarası doğrulanır ve aktifliği kontrol edilir.
 3. Telemetri verisi PostgreSQL'e yazılır.
-4. [KinesisTelemetryPublisher.PublishAsync](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/Modules/IoTModule/Infrastructure/Streaming/KinesisTelemetryPublisher.cs#L33) metodu çağrılır.
+4. [KinesisTelemetryPublisher.PublishAsync](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/OmniPulse.IoT/Infrastructure/Streaming/KinesisTelemetryPublisher.cs#L33) metodu çağrılır.
    * **Partition Key** olarak cihazın `SerialNumber` değeri verilir. Bu sayede aynı cihaza ait tüm telemetri kayıtları Kinesis'te aynı Shard'a sıralı olarak yerleştirilir.
 
 ### 📝 Yayınlanan Telemetri Şeması (JSON Payload)
@@ -66,15 +66,15 @@ Cihazlardan gelen ham verilerin doğrulanması, PostgreSQL veritabanına mühür
 
 Kinesis Data Streams'ten akan verileri arka planda asenkron olarak okuyan, hatalarda tekrar deneme uygulayan ve iş akışlarına yönlendiren arka plan servisidir.
 
-* **İlgili Sınıf**: [KinesisTelemetryConsumer](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/Modules/WorkflowModule/Infrastructure/Services/KinesisTelemetryConsumer.cs)
-* **Şema Sınıfı**: [TelemetryEventPayload](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/Modules/WorkflowModule/Infrastructure/Services/KinesisTelemetryConsumer.cs#L15)
+* **İlgili Sınıf**: [KinesisTelemetryConsumer](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/OmniPulse.Workflow/Infrastructure/Services/KinesisTelemetryConsumer.cs)
+* **Şema Sınıfı**: [TelemetryEventPayload](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/OmniPulse.Workflow/Infrastructure/Services/KinesisTelemetryConsumer.cs#L15)
 
 ### ⚙️ Çalışma Mantığı
 1. `KinesisTelemetryConsumer` bir `BackgroundService` olarak ayağa kalkar.
 2. `ExecuteAsync` içinde her 15 saniyede bir `DescribeStreamAsync` ile aktif shard listesi çekilir.
 3. Her shard için asenkron bir `ProcessShardAsync` görevi başlatılır (eğer o shard için zaten aktif bir task yoksa).
 4. `ProcessShardAsync` içerisinde `GetRecordsAsync` ile veriler 100'erli paketler halinde çekilir.
-5. Her kayıt için [ProcessRecordWithRetryAsync](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/Modules/WorkflowModule/Infrastructure/Services/KinesisTelemetryConsumer.cs#L182) çağrılır:
+5. Her kayıt için [ProcessRecordWithRetryAsync](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/OmniPulse.Workflow/Infrastructure/Services/KinesisTelemetryConsumer.cs#L182) çağrılır:
    * **Tekrar Deneme (Retry)**: İş akışı tetiklenirken hata oluşursa, üstel bekleme süresiyle (Backoff) maksimum 3 deneme yapılır.
    * **Hatalı İletiler (DLQ)**: Bozuk veriler veya 3 deneme sonunda da başarısız olan kayıtlar AWS SQS kuyruğuna (Dead Letter Queue) park edilir.
 
@@ -95,7 +95,7 @@ Kinesis Data Streams'ten akan verileri arka planda asenkron olarak okuyan, hatal
 
 Tüketilen telemetri olayları, tanımlanmış iş akışı kurallarına göre değerlendirilerek DynamoDB üzerinde otonom görevler oluşturur.
 
-* **İlgili Sınıf**: [ProcessTelemetryEventCommandHandler](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/Modules/WorkflowModule/Features/Workflows/ProcessTelemetryEvent/ProcessTelemetryEventCommandHandler.cs)
+* **İlgili Sınıf**: [ProcessTelemetryEventCommandHandler](file:///var/home/Chronic_Panda/RiderProjects/omnipulse/src/OmniPulse.Workflow/Features/Workflows/ProcessTelemetryEvent/ProcessTelemetryEventCommandHandler.cs)
 
 ### ⚙️ İş Akışı Senaryosu: Sıcaklık Sınırı Aşımı
 1. Cihaz soğutuculu tırın içindeki sıcaklığı **6.5°C** olarak gönderir.

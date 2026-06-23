@@ -1,0 +1,11 @@
+using MediatR;
+
+namespace OmniPulse.Workflow.Features.Workflows.RunDemo;
+
+public record RunDemoCommand : IRequest<RunDemoResult>;
+
+public record RunDemoResult(
+    string Summary,
+    object SeedDetails,
+    object ExecutionLogs
+);
